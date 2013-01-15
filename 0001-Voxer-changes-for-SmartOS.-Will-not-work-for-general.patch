@@ -1,0 +1,141 @@
+From 117ac44dc1b8fd75d916dab259b589e4d651ef01 Mon Sep 17 00:00:00 2001
+From: Matt Ranney <mjr@ranney.com>
+Date: Thu, 18 Oct 2012 18:06:57 +0000
+Subject: [PATCH] Voxer changes for SmartOS. Will not work for general case or
+ Linux.
+
+---
+ Makefile        |    7 ++++---
+ configuration.c |    2 ++
+ stud.c          |   37 +++++++++++++++++++++----------------
+ 3 files changed, 27 insertions(+), 19 deletions(-)
+
+diff --git a/Makefile b/Makefile
+index eba3e9c..a7409ce 100644
+--- a/Makefile
++++ b/Makefile
+@@ -7,9 +7,10 @@ PREFIX  = /usr/local
+ BINDIR  = $(PREFIX)/bin
+ MANDIR  = $(PREFIX)/share/man
+ 
+-CFLAGS  = -O2 -g -std=c99 -fno-strict-aliasing -Wall -W -D_GNU_SOURCE -I/usr/local/include
+-LDFLAGS = -lssl -lcrypto -lev -L/usr/local/lib
+-OBJS    = stud.o ringbuffer.o configuration.o
++LDFLAGS=-g -lssl -lm -lcrypto -lsocket -lnsl /opt/local/lib/ev/libev.a -m64 -L/opt/local/lib -Wl,-R/opt/local/lib
++CC=gcc
++CFLAGS=-O2 -m64 -I/opt/local/include/ev -g
++OBJS    =stud.o ringbuffer.o configuration.o
+ 
+ all: realall
+ 
+diff --git a/configuration.c b/configuration.c
+index 25fead7..0200954 100644
+--- a/configuration.c
++++ b/configuration.c
+@@ -19,6 +19,8 @@
+ #include <sys/stat.h>
+ #include <syslog.h>
+ 
++#include <netinet/ip_compat.h>
++
+ #include "configuration.h"
+ #include "version.h"
+ 
+diff --git a/stud.c b/stud.c
+index 1e83617..4440be6 100644
+--- a/stud.c
++++ b/stud.c
+@@ -49,6 +49,9 @@
+ #include <syslog.h>
+ #include <stdarg.h>
+ 
++#include <sys/filio.h>
++#include <sys/signal.h>
++
+ #include <ctype.h>
+ #include <sched.h>
+ #include <signal.h>
+@@ -73,12 +76,6 @@
+ # define AI_ADDRCONFIG 0
+ #endif
+ 
+-/* For Mac OS X */
+-#ifndef TCP_KEEPIDLE
+-# ifdef TCP_KEEPALIVE
+-#  define TCP_KEEPIDLE TCP_KEEPALIVE
+-# endif
+-#endif
+ #ifndef SOL_TCP
+ # define SOL_TCP IPPROTO_TCP
+ #endif
+@@ -189,9 +186,12 @@ typedef struct proxystate {
+ 
+ /* Set a file descriptor (socket) to non-blocking mode */
+ static void setnonblocking(int fd) {
+-    int flag = 1;
++  int flag = 1;
+ 
+-    assert(ioctl(fd, FIONBIO, &flag) == 0);
++  if (ioctl(fd, FIONBIO, &flag) == -1) {
++    ERR("Couldn't set non-blocking on socket, errno: %d\n", errno);
++    assert(errno == ECONNRESET);
++  }
+ }
+ 
+ /* set a tcp socket to use TCP Keepalive */
+@@ -206,8 +206,8 @@ static void settcpkeepalive(int fd) {
+     optval = CONFIG->TCP_KEEPALIVE_TIME;
+     optlen = sizeof(optval);
+ #ifdef TCP_KEEPIDLE
+-    if(setsockopt(fd, SOL_TCP, TCP_KEEPIDLE, &optval, optlen) < 0) {
+-        ERR("Error setting TCP_KEEPIDLE on client socket: %s", strerror(errno));
++    if(setsockopt(fd, SOL_TCP, TCP_KEEPALIVE, &optval, optlen) < 0) {
++        ERR("Error setting TCP_KEEPALIVE on client socket: %s", strerror(errno));
+     }
+ #endif
+ }
+@@ -1311,7 +1311,12 @@ static void handle_accept(struct ev_loop *loop, ev_io *w, int revents) {
+             ERR("{client} accept() failed; too many open files for this system\n");
+             break;
+ 
++	case ECONNABORTED:
++	  ERR("{client} accept() failed; client went away while negotiating TCP with Solaris ECONNABORTED\n");
++	  break;
++
+         default:
++	  fprintf(stderr, "server socket accept returned -1, errno is: %d\n", errno);
+             assert(errno == EINTR || errno == EWOULDBLOCK || errno == EAGAIN);
+             break;
+         }
+@@ -1752,22 +1757,22 @@ void daemonize () {
+     }
+ 
+     /* close standard streams */
+-    fclose(stdin);
+-    fclose(stdout);
+-    fclose(stderr);
++    //    fclose(stdin);
++    //    fclose(stdout);
++    //    fclose(stderr);
+ 
+     /* reopen standard streams to null device */
+-    stdin = fopen(NULL_DEV, "r");
++    freopen(NULL_DEV, "r", stdin);
+     if (stdin == NULL) {
+         ERR("Unable to reopen stdin to %s: %s\n", NULL_DEV, strerror(errno));
+         exit(1);
+     }
+-    stdout = fopen(NULL_DEV, "w");
++    freopen(NULL_DEV, "w", stdout);
+     if (stdout == NULL) {
+         ERR("Unable to reopen stdout to %s: %s\n", NULL_DEV, strerror(errno));
+         exit(1);
+     }
+-    stderr = fopen(NULL_DEV, "w");
++    freopen(NULL_DEV, "w", stderr);
+     if (stderr == NULL) {
+         ERR("Unable to reopen stderr to %s: %s\n", NULL_DEV, strerror(errno));
+         exit(1);
+-- 
+1.7.7.2
+
