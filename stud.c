@@ -621,6 +621,12 @@ SSL_CTX *make_ctx(const char *pemfile) {
         SSL_CTX_set_options(ctx, SSL_OP_CIPHER_SERVER_PREFERENCE);
     }
 
+#if defined(SSL_CTX_set_max_send_fragment)
+    if (CONFIG->MAX_SEND_FRAGMENT) {
+        SSL_CTX_set_max_send_fragment(CONFIG->MAX_SEND_FRAGMENT);
+    }
+#endif /* defined(SSL_CTX_set_max_send_fragment) */
+
     if (CONFIG->PMODE == SSL_CLIENT) {
         return ctx;
     }
@@ -1263,9 +1269,27 @@ static void ssl_write(struct ev_loop *loop, ev_io *w, int revents) {
     proxystate *ps = (proxystate *)w->data;
     assert(!ringbuffer_is_empty(&ps->ring_clear2ssl));
     char * next = ringbuffer_read_next(&ps->ring_clear2ssl, &sz);
+
+#if !defined(SSL_CTX_set_max_send_fragment)
+    int orig_sz = sz;
+
+    do {
+        if (CONFIG->MAX_SEND_FRAGMENT && sz > CONFIG->MAX_SEND_FRAGMENT)
+            sz = CONFIG->MAX_SEND_FRAGMENT;
+#endif /* defined(SSL_CTX_set_max_send_fragment) */
+
     t = SSL_write(ps->ssl, next, sz);
     if (t > 0) {
         if (t == sz) {
+#if !defined(SSL_CTX_set_max_send_fragment)
+            if (orig_sz > sz) {
+                orig_sz -= t;
+                next += t;
+                ringbuffer_read_skip(&ps->ring_clear2ssl, t);
+                sz = orig_sz;
+                continue;
+            }
+#endif /* defined(SSL_CTX_set_max_send_fragment) */
             ringbuffer_read_pop(&ps->ring_clear2ssl);
             if (ps->clear_connected)
                 safe_enable_io(ps, &ps->ev_r_clear); // can be re-enabled b/c we've popped
@@ -1290,6 +1314,10 @@ static void ssl_write(struct ev_loop *loop, ev_io *w, int revents) {
         else
             handle_fatal_ssl_error(ps, err,  w->fd == ps->fd_up ? 0 : 1);
     }
+
+#if !defined(SSL_CTX_set_max_send_fragment)
+    } while(0);
+#endif /* defined(SSL_CTX_set_max_send_fragment) */
 }
 
 /* libev read handler for the bound socket.  Socket is accepted,

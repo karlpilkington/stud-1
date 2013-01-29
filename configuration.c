@@ -37,6 +37,7 @@
 #define CFG_WORKERS "workers"
 #define CFG_BACKLOG "backlog"
 #define CFG_KEEPALIVE "keepalive"
+#define CFG_MAX_SEND_FRAGMENT "max-send-fragment"
 #define CFG_CHROOT "chroot"
 #define CFG_USER "user"
 #define CFG_GROUP "group"
@@ -149,6 +150,7 @@ stud_config * config_new (void) {
   r->TCP_KEEPALIVE_TIME = 3600;
   r->DAEMONIZE          = 0;
   r->PREFER_SERVER_CIPHERS = 0;
+  r->MAX_SEND_FRAGMENT = 0;
 
   return r;
 }
@@ -573,6 +575,9 @@ void config_param_validate (char *k, char *v, stud_config *cfg, char *file, int 
   }
   else if (strcmp(k, CFG_KEEPALIVE) == 0) {
     r = config_param_val_int_pos(v, &cfg->TCP_KEEPALIVE_TIME);
+  }
+  else if (strcmp(k, CFG_MAX_SEND_FRAGMENT) == 0) {
+    r = config_param_val_int_pos(v, &cfg->MAX_SEND_FRAGMENT);
   }
 #ifdef USE_SHARED_CACHE
   else if (strcmp(k, CFG_SHARED_CACHE) == 0) {
@@ -1009,6 +1014,12 @@ void config_print_default (FILE *fd, stud_config *cfg) {
   fprintf(fd, FMT_ISTR, CFG_KEEPALIVE, cfg->TCP_KEEPALIVE_TIME);
   fprintf(fd, "\n");
 
+  fprintf(fd, "# SSL maximum fragment size\n");
+  fprintf(fd, "#\n");
+  fprintf(fd, "# type: integer\n");
+  fprintf(fd, FMT_ISTR, CFG_MAX_SEND_FRAGMENT, cfg->MAX_SEND_FRAGMENT);
+  fprintf(fd, "\n");
+
 #ifdef USE_SHARED_CACHE
   fprintf(fd, "# SSL session cache size\n");
   fprintf(fd, "#\n");
@@ -1156,6 +1167,7 @@ void config_parse_cli(int argc, char **argv, stud_config *cfg) {
     { CFG_SHARED_CACHE_MCASTIF, 1, NULL, 'M' },
 #endif
     { CFG_KEEPALIVE, 1, NULL, 'k' },
+    { CFG_MAX_SEND_FRAGMENT, 1, NULL, 'F' },
     { CFG_CHROOT, 1, NULL, 'r' },
     { CFG_USER, 1, NULL, 'u' },
     { CFG_GROUP, 1, NULL, 'g' },
@@ -1177,7 +1189,7 @@ void config_parse_cli(int argc, char **argv, stud_config *cfg) {
     int option_index = 0;
     c = getopt_long(
       argc, argv,
-      "c:e:Ob:f:n:B:C:U:P:M:k:r:u:g:qstVh",
+      "c:e:Ob:f:n:B:C:U:P:M:k:F:r:u:g:qstVh",
       long_options, &option_index
     );
 
@@ -1237,6 +1249,9 @@ void config_parse_cli(int argc, char **argv, stud_config *cfg) {
 #endif
       case 'k':
         config_param_validate(CFG_KEEPALIVE, optarg, cfg, NULL, 0);
+        break;
+      case 'F':
+        config_param_validate(CFG_MAX_SEND_FRAGMENT, optarg, cfg, NULL, 0);
         break;
       case 'r':
         config_param_validate(CFG_CHROOT, optarg, cfg, NULL, 0);
