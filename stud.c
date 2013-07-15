@@ -892,6 +892,11 @@ static void shutdown_proxy(proxystate *ps, SHUTDOWN_REQUESTOR req) {
         SSL_set_shutdown(ps->ssl, SSL_SENT_SHUTDOWN);
         SSL_free(ps->ssl);
 
+        /* Make use-after-free fail immediately */
+        ps->fd_up = -1;
+        ps->fd_down = -1;
+        ps->ssl = NULL;
+
         free(ps);
     }
     else {
