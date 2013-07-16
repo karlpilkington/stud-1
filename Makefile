@@ -7,10 +7,10 @@ PREFIX  = /usr/local
 BINDIR  = $(PREFIX)/bin
 MANDIR  = $(PREFIX)/share/man
 
-LDFLAGS=-g -lssl -lm -lcrypto -lsocket -lnsl /opt/local/lib/ev/libev.a -m64 -L/opt/local/lib -Wl,-R/opt/local/lib
+LDFLAGS=-g -lm -lsocket -lnsl -m64 -L/opt/local/lib -Wl,-R/opt/local/lib
 CC=gcc
-CFLAGS=-O2 -m64 -I/opt/local/include/ev -g
-OBJS    =stud.o ringbuffer.o configuration.o
+CFLAGS=-O2 -m64 -Ideps/libev -g
+OBJS    =stud.o ringbuffer.o configuration.o deps/libev/.libs/libev.a deps/openssl/libssl.a deps/openssl/libcrypto.a
 
 all: realall
 
@@ -40,6 +40,20 @@ realall: $(ALL)
 stud: $(OBJS)
 	$(CC) -o $@ $^ $(LDFLAGS)
 
+deps/libev/.libs/libev.a: deps/libev/Makefile
+	$(MAKE) $(MAKEFLAGS) -C deps/libev
+
+deps/libev/Makefile:
+	cd deps/libev && ./configure
+
+# Forward dependency
+deps/openssl/libssl.a: deps/openssl/libcrypto.a
+
+deps/openssl/libcrypto.a:
+	cd deps/openssl && ./Configure no-idea no-mdc2 no-rc5 enable-tlsext solaris64-x86_64-gcc
+	$(MAKE) $(MAKEFLAGS) -C deps/openssl depend
+	$(MAKE) $(MAKEFLAGS) -C deps/openssl
+
 install: $(ALL)
 	install -d $(DESTDIR)$(BINDIR)
 	install stud $(DESTDIR)$(BINDIR)
@@ -48,6 +62,8 @@ install: $(ALL)
 
 clean:
 	rm -f stud $(OBJS)
+	make -C deps/openssl clean
+	make -C deps/libev clean
 
 
 .PHONY: all realall
