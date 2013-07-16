@@ -186,12 +186,24 @@ typedef struct proxystate {
 
 /* Set a file descriptor (socket) to non-blocking mode */
 static void setnonblocking(int fd) {
-  int flag = 1;
-
-  if (ioctl(fd, FIONBIO, &flag) == -1) {
-    ERR("Couldn't set non-blocking on socket, errno: %d\n", errno);
-    assert(errno == ECONNRESET);
-  }
+  int flag;
+  int r;
+#if defined(O_NONBLOCK)
+  /* O_NONBLOCK is more portable and POSIX-standard */
+  flag = O_NONBLOCK;
+  do
+    r = fcntl(fd, F_SETFL, flag);
+  while (r == -1 && errno == EINTR);
+  assert(r == 0);
+#elif defined(FIONBIO)
+  flag = 1;
+  do
+    r = ioctl(fd, FIONBIO, &set);
+  while (r == -1 && errno == EINTR);
+  assert(r == 0);
+#else
+# error O_NONBLOCK and FIONBIO are both undefined for this platform
+#endif
 }
 
 /* set a tcp socket to use TCP Keepalive */
@@ -203,9 +215,9 @@ static void settcpkeepalive(int fd) {
         ERR("Error activating SO_KEEPALIVE on client socket: %s", strerror(errno));
     }
 
+#ifdef TCP_KEEPIDLE
     optval = CONFIG->TCP_KEEPALIVE_TIME;
     optlen = sizeof(optval);
-#ifdef TCP_KEEPIDLE
     if(setsockopt(fd, SOL_TCP, TCP_KEEPALIVE, &optval, optlen) < 0) {
         ERR("Error setting TCP_KEEPALIVE on client socket: %s", strerror(errno));
     }
@@ -1762,11 +1774,6 @@ void daemonize () {
         printf("{core} Daemonized as pid %d.\n", pid);
         exit(0);
     }
-
-    /* close standard streams */
-    //    fclose(stdin);
-    //    fclose(stdout);
-    //    fclose(stderr);
 
     /* reopen standard streams to null device */
     freopen(NULL_DEV, "r", stdin);
