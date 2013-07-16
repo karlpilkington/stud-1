@@ -51,8 +51,8 @@ deps/openssl/libssl.a: deps/openssl/libcrypto.a
 
 deps/openssl/libcrypto.a:
 	cd deps/openssl && ./Configure no-idea no-mdc2 no-rc5 enable-tlsext solaris64-x86_64-gcc
-	$(MAKE) $(MAKEFLAGS) -C deps/openssl depend
-	$(MAKE) $(MAKEFLAGS) -C deps/openssl
+	-$(MAKE) $(MAKEFLAGS) -C deps/openssl depend
+	-$(MAKE) $(MAKEFLAGS) -C deps/openssl
 
 install: $(ALL)
 	install -d $(DESTDIR)$(BINDIR)
