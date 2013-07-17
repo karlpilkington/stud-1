@@ -65,6 +65,7 @@
 #include <openssl/asn1.h>
 #include <ev.h>
 
+#include "stud_provider.h"
 #include "ringbuffer.h"
 #include "shctx.h"
 #include "configuration.h"
@@ -1081,6 +1082,43 @@ static void end_handshake(proxystate *ps) {
         ps->ssl->s3->flags |= SSL3_FLAGS_NO_RENEGOTIATE_CIPHERS;
     }
     ps->handshaked = 1;
+
+    /* Probe for session reuse */
+    if (STUD_SSL_SESSION_REUSE_ENABLED() || !CONFIG->QUIET) {
+        SSL_SESSION* sess = SSL_get_session(ps->ssl);
+        long expiry = SSL_SESSION_get_time(sess) +
+                      SSL_SESSION_get_timeout(sess) -
+                      (time_t) ev_now(loop);
+        struct sockaddr_in* addr = (struct sockaddr_in*) &ps->remote_ip;
+        int port = ntohs(addr->sin_port);
+        char host[INET6_ADDRSTRLEN];
+
+        if (addr->sin_family == AF_INET) {
+            inet_ntoa_r(addr->sin_addr, host, sizeof(host));
+        }
+        else if (addr->sin_family == AF_INET6 ) {
+          struct sockaddr_in6* addr6 = (struct sockaddr_in6*) addr;
+          inet_ntop(AF_INET6, &(addr6->sin6_addr), host, sizeof(host));
+        }
+
+        if (SSL_session_reused(ps->ssl)) {
+            LOG("op=\"stud session reuse\" "
+                "client=\"%s:%d\" "
+                "expiry=\"%ld\"\n",
+                host,
+                port,
+                expiry);
+            STUD_SSL_SESSION_REUSE(host, port, expiry);
+        } else {
+            LOG("op=\"stud session new\" "
+                "client=\"%s:%d\" "
+                "expiry=\"%ld\"\n",
+                host,
+                port,
+                expiry);
+            STUD_SSL_SESSION_NEW(host, port, expiry);
+        }
+    }
 
     /* Check if clear side is connected */
     if (!ps->clear_connected) {

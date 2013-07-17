@@ -10,7 +10,8 @@ MANDIR  = $(PREFIX)/share/man
 LDFLAGS=-g -lm -lsocket -lnsl -m64 -L/opt/local/lib -Wl,-R/opt/local/lib
 CC=gcc
 CFLAGS=-O2 -m64 -Ideps/libev -g
-OBJS    =stud.o ringbuffer.o configuration.o deps/libev/.libs/libev.a deps/openssl/libssl.a deps/openssl/libcrypto.a
+OBJS    =stud_provider.o stud.o ringbuffer.o configuration.o \
+				 deps/libev/.libs/libev.a deps/openssl/libssl.a deps/openssl/libcrypto.a
 
 all: realall
 
@@ -33,6 +34,14 @@ endif
 ifneq ($(NO_CONFIG_FILE),)
 CFLAGS += -DNO_CONFIG_FILE
 endif
+
+stud_provider.h: stud_provider.d
+	dtrace -64 -h -xnolibs -s $^ -o $@
+
+stud_provider.o: stud.o stud_provider.d
+	dtrace -64 -G -xnolibs -s stud_provider.d -o $@ stud.o
+
+ALL += stud_provider.h
 
 ALL += stud
 realall: $(ALL)
@@ -61,7 +70,7 @@ install: $(ALL)
 	install -m 644 stud.8 $(DESTDIR)$(MANDIR)/man8
 
 clean:
-	rm -f stud $(OBJS)
+	rm -f stud $(OBJS) stud_provider.h
 	make -C deps/openssl clean
 	make -C deps/libev clean
 
