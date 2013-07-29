@@ -48,9 +48,12 @@
 #include <limits.h>
 #include <syslog.h>
 #include <stdarg.h>
+#include <stdbool.h>
 
+#ifdef __sun
 #include <sys/filio.h>
 #include <sys/signal.h>
+#endif
 
 #include <ctype.h>
 #include <sched.h>
@@ -66,7 +69,7 @@
 #include <ev.h>
 
 #include "stud_provider.h"
-#include "ringbuffer.h"
+//#include "ringbuffer.h"
 #include "shctx.h"
 #include "configuration.h"
 
@@ -136,14 +139,82 @@ static ctx_list *sni_ctxs;
 
 #endif /* OPENSSL_NO_TLSEXT */
 
+#define likely(x) __builtin_expect((x),1)
+#define unlikely(x) __builtin_expect((x),0)
+#define RING_BUFFER_SIZE (16*1024)
+
+typedef struct {
+  int head,tail;
+  char buf[RING_BUFFER_SIZE];
+}ringbuffer_t;
+
+static inline void ringbuffer_init(ringbuffer_t * __restrict r){
+    r->head=r->tail=0;
+}
+static inline bool ringbuffer_is_empty(const ringbuffer_t *r){
+  return r->head==r->tail;
+}
+static inline bool ringbuffer_is_full(const ringbuffer_t *r){
+  return ((r->tail+1)&(RING_BUFFER_SIZE-1)) == r->head;
+}
+static inline int ringbuffer_available_to_write(const ringbuffer_t *r){
+  return (r->tail + RING_BUFFER_SIZE - r->head -1)&(RING_BUFFER_SIZE-1);
+}
+static inline int ringbuffer_available_to_read(const ringbuffer_t *r){
+  return (r->tail + RING_BUFFER_SIZE - r->head)&(RING_BUFFER_SIZE-1);
+}
+
+int ringbuffer_append(ringbuffer_t *r, const char *buf, int len){
+  if(ringbuffer_is_full(r)){
+    return 0;
+  }
+  int max_bytes=ringbuffer_available_to_write(r);
+  len=(len > max_bytes)?max_bytes:len;
+  if(len > (RING_BUFFER_SIZE-r->tail)){
+    int first_chunk=RING_BUFFER_SIZE-r->tail;
+    memcpy(r->buf+r->tail,buf,first_chunk);
+    memcpy(r->buf,buf+first_chunk,len-first_chunk);
+    r->tail=(r->tail+len)&(RING_BUFFER_SIZE-1);
+  }else{
+    memcpy(r->buf+r->tail,buf,len);
+    r->tail+=len;
+  }
+  return len;
+}
+
+char *ringbuffer_get(ringbuffer_t * __restrict r, char * __restrict buf, int *output_len){
+    int len=ringbuffer_available_to_read(r);
+    *output_len=len;
+    if(len > RING_BUFFER_SIZE-r->head){
+        int first_chunk=RING_BUFFER_SIZE-r->tail;
+        memcpy(buf,r->buf+r->head,first_chunk);
+        memcpy(buf+first_chunk,r->buf,len-first_chunk);
+        return buf;
+    }
+    return r->buf;
+}
+
+void ringbuffer_advance_read_head(ringbuffer_t * __restrict r, int len){
+    r->head=(r->head+len)&(RING_BUFFER_SIZE-1);
+    if(r->head==r->tail){
+        r->head=r->tail=0;
+    }
+}
+void ringbuffer_advance_write_head(ringbuffer_t * __restrict r, int len){
+    r->tail=(r->tail+len)&(RING_BUFFER_SIZE-1);
+}
+char *ringbuffer_write_ptr(ringbuffer_t * __restrict r){
+    return r->buf+r->tail;
+}
+
 /*
  * Proxied State
  *
  * All state associated with one proxied connection
  */
 typedef struct proxystate {
-    ringbuffer ring_ssl2clear;          /* Pushing bytes from secure to clear stream */
-    ringbuffer ring_clear2ssl;          /* Pushing bytes from clear to secure stream */
+    //ringbuffer ring_ssl2clear;          /* Pushing bytes from secure to clear stream */
+    //ringbuffer ring_clear2ssl;          /* Pushing bytes from clear to secure stream */
 
     ev_io ev_r_ssl;                     /* Secure stream write event */
     ev_io ev_w_ssl;                     /* Secure stream read event */
@@ -169,6 +240,8 @@ typedef struct proxystate {
     SSL *ssl;                           /* OpenSSL SSL state */
 
     struct sockaddr_storage remote_ip;  /* Remote ip returned from `accept` */
+    ringbuffer_t ring_ssl2clear;
+    ringbuffer_t ring_clear2ssl;
 } proxystate;
 
 #define LOG(...)                                            \
@@ -216,13 +289,15 @@ static void settcpkeepalive(int fd) {
         ERR("Error activating SO_KEEPALIVE on client socket: %s", strerror(errno));
     }
 
+    /* 
 #ifdef TCP_KEEPIDLE
     optval = CONFIG->TCP_KEEPALIVE_TIME;
     optlen = sizeof(optval);
     if(setsockopt(fd, SOL_TCP, TCP_KEEPALIVE, &optval, optlen) < 0) {
         ERR("Error setting TCP_KEEPALIVE on client socket: %s", strerror(errno));
     }
-#endif
+#endif 
+    */
 }
 
 static void fail(const char* s) {
@@ -948,6 +1023,8 @@ static int start_connect(proxystate *ps) {
     shutdown_proxy(ps, SHUTDOWN_HARD);
     return -1;
 }
+static void start_handshake(proxystate *ps, int err);
+static void handle_fatal_ssl_error(proxystate *ps, int err, int backend);
 
 /* Read some data from the backend when libev says data is available--
  * write it into the upstream buffer and make sure the write event is
@@ -956,26 +1033,59 @@ static void clear_read(struct ev_loop *loop, ev_io *w, int revents) {
     (void) revents;
     int t;
     proxystate *ps = (proxystate *)w->data;
-    if (ps->want_shutdown) {
+    if (unlikely(ps->want_shutdown)) {
         ev_io_stop(loop, &ps->ev_r_clear);
         return;
     }
     int fd = w->fd;
-    char * buf = ringbuffer_write_ptr(&ps->ring_clear2ssl);
-    t = recv(fd, buf, RING_DATA_LEN, 0);
 
-    if (t > 0) {
-        ringbuffer_write_append(&ps->ring_clear2ssl, t);
-        if (ringbuffer_is_full(&ps->ring_clear2ssl))
+    char buf[RING_BUFFER_SIZE-1];
+    ringbuffer_t *ring=&ps->ring_clear2ssl;
+    int prev_len=ringbuffer_available_to_read(ring);
+    // get previously buffered data 
+    int offset=prev_len,ret;
+    while(offset < sizeof(buf)){
+      ret = recv(fd, buf+offset, sizeof(buf)-offset, 0);
+      if(ret <=0){
+        break;
+      }
+      offset+=ret;
+    }
+    if (likely(offset > 0)) {
+        bool need_append=true;
+        if (ps->handshaked){
+            //write the data
+            //check for other data waiting to be written and append and write it
+            if(prev_len > 0){
+                ringbuffer_get(ring,buf,&prev_len);
+            }
+            ret = SSL_write(ps->ssl, buf, offset);
+            if(likely(ret > 0)){
+                ringbuffer_advance_read_head(ring,ret < prev_len?ret:prev_len);
+                if(ret < offset){
+                    //append data to ring
+                    ringbuffer_append(ring,buf+ret,offset-ret);
+                }
+                need_append=false;
+            }else {
+                int err = SSL_get_error(ps->ssl, ret);
+                if (err == SSL_ERROR_WANT_READ){
+                    start_handshake(ps, err);
+                }else if (err == SSL_ERROR_WANT_WRITE) {
+                    /*  SSL socket is backed up */
+                }else{
+                    handle_fatal_ssl_error(ps, err, 1);
+                }
+            }
+        }
+        if (ringbuffer_is_full(ring))
             ev_io_stop(loop, &ps->ev_r_clear);
         if (ps->handshaked)
             safe_enable_io(ps, &ps->ev_w_ssl);
-    }
-    else if (t == 0) {
+    }else if (ret  == 0) {
         LOG("{%s} Connection closed\n", fd == ps->fd_down ? "backend" : "client");
         shutdown_proxy(ps, SHUTDOWN_CLEAR);
-    }
-    else {
+    }else if((errno!=EINTR) || (errno != EAGAIN)){
         assert(t == -1);
         handle_socket_errno(ps, fd == ps->fd_down ? 1 : 0);
     }
@@ -988,36 +1098,35 @@ static void clear_write(struct ev_loop *loop, ev_io *w, int revents) {
     proxystate *ps = (proxystate *)w->data;
     int fd = w->fd;
     int sz;
+    ringbuffer_t *ring=&ps->ring_clear2ssl;
 
+    if(unlikely(ringbuffer_is_empty(&ps->ring_ssl2clear))){
+        return;
+    }
     assert(!ringbuffer_is_empty(&ps->ring_ssl2clear));
 
-    char *next = ringbuffer_read_next(&ps->ring_ssl2clear, &sz);
+    char buf[RING_BUFFER_SIZE];
+    char *next=ringbuffer_get(&ps->ring_ssl2clear,buf,&sz);
     t = send(fd, next, sz, MSG_NOSIGNAL);
 
     if (t > 0) {
+        ringbuffer_advance_read_head(ring,t);
         if (t == sz) {
-            ringbuffer_read_pop(&ps->ring_ssl2clear);
-            if (ps->handshaked)
+            if (ps->handshaked){
                 safe_enable_io(ps, &ps->ev_r_ssl);
-            if (ringbuffer_is_empty(&ps->ring_ssl2clear)) {
-                if (ps->want_shutdown) {
-                    shutdown_proxy(ps, SHUTDOWN_HARD);
-                    return; // dealloc'd
-                }
-                ev_io_stop(loop, &ps->ev_w_clear);
             }
-        }
-        else {
-            ringbuffer_read_skip(&ps->ring_ssl2clear, t);
-        }
-    }
-    else {
+            if (ps->want_shutdown) {
+                shutdown_proxy(ps, SHUTDOWN_HARD);
+                return; // dealloc'd
+            }
+            ev_io_stop(loop, &ps->ev_w_clear);
+            }
+    }else {
         assert(t == -1);
         handle_socket_errno(ps, fd == ps->fd_down ? 1 : 0);
     }
 }
 
-static void start_handshake(proxystate *ps, int err);
 
 /* Continue/complete the asynchronous connect() before starting data transmission
  * between front/backend */
@@ -1126,10 +1235,10 @@ static void end_handshake(proxystate *ps) {
             char *ring_pnt = ringbuffer_write_ptr(&ps->ring_ssl2clear);
             assert(ps->remote_ip.ss_family == AF_INET ||
                    ps->remote_ip.ss_family == AF_INET6);
-            if(ps->remote_ip.ss_family == AF_INET) {
+            if(likely(ps->remote_ip.ss_family == AF_INET)) {
                struct sockaddr_in* addr = (struct sockaddr_in*)&ps->remote_ip;
                written = snprintf(ring_pnt,
-                                  RING_DATA_LEN,
+                                  RING_BUFFER_SIZE,
                                   tcp_proxy_line,
                                   "TCP4",
                                   inet_ntoa(addr->sin_addr),
@@ -1139,13 +1248,13 @@ static void end_handshake(proxystate *ps) {
                         struct sockaddr_in6* addr = (struct sockaddr_in6*)&ps->remote_ip;
                         inet_ntop(AF_INET6,&(addr->sin6_addr),tcp6_address_string,INET6_ADDRSTRLEN);
                         written = snprintf(ring_pnt,
-                                  RING_DATA_LEN,
+                                  RING_BUFFER_SIZE,
                                   tcp_proxy_line,
                                   "TCP6",
                                   tcp6_address_string,
                                   ntohs(addr->sin6_port));
             }
-            ringbuffer_write_append(&ps->ring_ssl2clear, written);
+            ringbuffer_advance_write_head(&ps->ring_ssl2clear, written);
         }
         else if (CONFIG->WRITE_IP_OCTET) {
             char *ring_pnt = ringbuffer_write_ptr(&ps->ring_ssl2clear);
@@ -1155,12 +1264,12 @@ static void end_handshake(proxystate *ps) {
             if (ps->remote_ip.ss_family == AF_INET6) {
                 memcpy(ring_pnt, &((struct sockaddr_in6 *) &ps->remote_ip)
                        ->sin6_addr.s6_addr, 16U);
-                ringbuffer_write_append(&ps->ring_ssl2clear, 1U + 16U);
+                ringbuffer_advance_write_head(&ps->ring_ssl2clear, 1U + 16U);
             }
             else {
                 memcpy(ring_pnt, &((struct sockaddr_in *) &ps->remote_ip)
                        ->sin_addr.s_addr, 4U);
-                ringbuffer_write_append(&ps->ring_ssl2clear, 1U + 4U);
+                ringbuffer_advance_write_head(&ps->ring_ssl2clear, 1U + 4U);
             }
         }
         /* start connect now */
@@ -1211,7 +1320,7 @@ static void client_proxy_proxy(struct ev_loop *loop, ev_io *w, int revents) {
 
         char *ring = ringbuffer_write_ptr(&ps->ring_ssl2clear);
         memcpy(ring, tcp_proxy_line, proxy - tcp_proxy_line);
-        ringbuffer_write_append(&ps->ring_ssl2clear, proxy - tcp_proxy_line);
+        ringbuffer_advance_write_head(&ps->ring_ssl2clear, proxy - tcp_proxy_line);
 
         // Finished reading the PROXY header
         if (*(proxy - 1) == '\n') {
@@ -1284,8 +1393,18 @@ static void ssl_read(struct ev_loop *loop, ev_io *w, int revents) {
         ev_io_stop(loop, &ps->ev_r_ssl);
         return;
     }
-    char * buf = ringbuffer_write_ptr(&ps->ring_ssl2clear);
-    t = SSL_read(ps->ssl, buf, RING_DATA_LEN);
+    char buf[RING_BUFFER_SIZE-1];
+    ringbuffer_t *ring=&ps->ring_ssl2clear;
+    int prev_len=ringbuffer_available_to_read(ring);
+    // get previously buffered data 
+    int offset=prev_len,ret;
+    while(offset < sizeof(buf)){
+        ret = SSL_read(ps->ssl, buf, sizeof(buf)-offset);
+        if(ret <=0){
+            break;
+        }
+        offset+=ret;
+    }
 
     /* Fix CVE-2009-3555. Disable reneg if started by client. */
     if (ps->renegotiation) {
@@ -1294,7 +1413,7 @@ static void ssl_read(struct ev_loop *loop, ev_io *w, int revents) {
     }
 
     if (t > 0) {
-        ringbuffer_write_append(&ps->ring_ssl2clear, t);
+        ringbuffer_advance_write_head(&ps->ring_ssl2clear, t);
         if (ringbuffer_is_full(&ps->ring_ssl2clear))
             ev_io_stop(loop, &ps->ev_r_ssl);
         if (ps->clear_connected)
@@ -1318,27 +1437,24 @@ static void ssl_write(struct ev_loop *loop, ev_io *w, int revents) {
     int t;
     int sz;
     proxystate *ps = (proxystate *)w->data;
-    assert(!ringbuffer_is_empty(&ps->ring_clear2ssl));
-    char * next = ringbuffer_read_next(&ps->ring_clear2ssl, &sz);
+    ringbuffer_t *ring=&ps->ring_clear2ssl;
+    assert(!ringbuffer_is_empty(ring));
+    char buf[RING_BUFFER_SIZE];
+    char * next = ringbuffer_get(ring, buf, &sz);
     t = SSL_write(ps->ssl, next, sz);
     if (t > 0) {
+        ringbuffer_advance_read_head(ring,sz);
+        if (ps->clear_connected){
+            safe_enable_io(ps, &ps->ev_r_clear); // can be re-enabled b/c we've popped
+        }
         if (t == sz) {
-            ringbuffer_read_pop(&ps->ring_clear2ssl);
-            if (ps->clear_connected)
-                safe_enable_io(ps, &ps->ev_r_clear); // can be re-enabled b/c we've popped
-            if (ringbuffer_is_empty(&ps->ring_clear2ssl)) {
-                if (ps->want_shutdown) {
-                    shutdown_proxy(ps, SHUTDOWN_HARD);
-                    return;
-                }
-                ev_io_stop(loop, &ps->ev_w_ssl);
+            if (ps->want_shutdown) {
+                shutdown_proxy(ps, SHUTDOWN_HARD);
+                return;
             }
+            ev_io_stop(loop, &ps->ev_w_ssl);
         }
-        else {
-            ringbuffer_read_skip(&ps->ring_clear2ssl, t);
-        }
-    }
-    else {
+    }else {
         int err = SSL_get_error(ps->ssl, t);
         if (err == SSL_ERROR_WANT_READ) {
             start_handshake(ps, err);
