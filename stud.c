@@ -288,8 +288,6 @@ static void settcpkeepalive(int fd) {
     if(setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &optval, optlen) < 0) {
         ERR("Error activating SO_KEEPALIVE on client socket: %s", strerror(errno));
     }
-
-    /* 
 #ifdef TCP_KEEPIDLE
     optval = CONFIG->TCP_KEEPALIVE_TIME;
     optlen = sizeof(optval);
@@ -297,7 +295,6 @@ static void settcpkeepalive(int fd) {
         ERR("Error setting TCP_KEEPALIVE on client socket: %s", strerror(errno));
     }
 #endif 
-    */
 }
 
 static void fail(const char* s) {
