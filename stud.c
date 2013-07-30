@@ -53,6 +53,7 @@
 #ifdef __sun
 #include <sys/filio.h>
 #include <sys/signal.h>
+char *inet_ntoa_r(const struct in_addr in, char *buffer, int buflen);
 #endif
 
 #include <ctype.h>
@@ -192,6 +193,16 @@ char *ringbuffer_get(ringbuffer_t * __restrict r, char * __restrict buf, int *ou
         return buf;
     }
     return r->buf;
+}
+
+void ringbuffer_get2(ringbuffer_t * __restrict r, char * __restrict buf, int len){
+    if(len > RING_BUFFER_SIZE-r->head){
+        int first_chunk=RING_BUFFER_SIZE-r->tail;
+        memcpy(buf,r->buf+r->head,first_chunk);
+        memcpy(buf+first_chunk,r->buf,len-first_chunk);
+    }else{
+        memcpy(buf,r->buf+r->head,len);
+    }
 }
 
 void ringbuffer_advance_read_head(ringbuffer_t * __restrict r, int len){
@@ -953,8 +964,8 @@ static int create_back_socket() {
 
 /* Only enable a libev ev_io event if the proxied connection still
  * has both up and down connected */
-static void safe_enable_io(proxystate *ps, ev_io *w) {
-    if (!ps->want_shutdown)
+static inline void safe_enable_io(proxystate *ps, ev_io *w) {
+    if (likely(!ps->want_shutdown))
         ev_io_start(loop, w);
 }
 
@@ -1028,7 +1039,6 @@ static void handle_fatal_ssl_error(proxystate *ps, int err, int backend);
  * enabled for the upstream socket */
 static void clear_read(struct ev_loop *loop, ev_io *w, int revents) {
     (void) revents;
-    int t;
     proxystate *ps = (proxystate *)w->data;
     if (unlikely(ps->want_shutdown)) {
         ev_io_stop(loop, &ps->ev_r_clear);
@@ -1054,7 +1064,7 @@ static void clear_read(struct ev_loop *loop, ev_io *w, int revents) {
             //write the data
             //check for other data waiting to be written and append and write it
             if(prev_len > 0){
-                ringbuffer_get(ring,buf,&prev_len);
+                ringbuffer_get2(ring,buf,prev_len);
             }
             ret = SSL_write(ps->ssl, buf, offset);
             if(likely(ret > 0)){
@@ -1075,18 +1085,24 @@ static void clear_read(struct ev_loop *loop, ev_io *w, int revents) {
                 }
             }
         }
-        if (ringbuffer_is_full(ring))
-            ev_io_stop(loop, &ps->ev_r_clear);
-        if (ps->handshaked)
+        if(need_append){
+            ringbuffer_append(ring,buf+prev_len,offset-prev_len);
+        }
+        if (ps->handshaked){
             safe_enable_io(ps, &ps->ev_w_ssl);
+        }
+        if (ringbuffer_is_full(ring)){
+            ev_io_stop(loop, &ps->ev_r_clear);
+        }
     }else if (ret  == 0) {
         LOG("{%s} Connection closed\n", fd == ps->fd_down ? "backend" : "client");
         shutdown_proxy(ps, SHUTDOWN_CLEAR);
     }else if((errno!=EINTR) || (errno != EAGAIN)){
-        assert(t == -1);
+        assert(ret == -1);
         handle_socket_errno(ps, fd == ps->fd_down ? 1 : 0);
     }
 }
+
 /* Write some data, previously received on the secure upstream socket,
  * out of the downstream buffer and onto the backend socket */
 static void clear_write(struct ev_loop *loop, ev_io *w, int revents) {
@@ -1098,10 +1114,10 @@ static void clear_write(struct ev_loop *loop, ev_io *w, int revents) {
     ringbuffer_t *ring=&ps->ring_clear2ssl;
 
     if(unlikely(ringbuffer_is_empty(&ps->ring_ssl2clear))){
+        ev_io_stop(loop, &ps->ev_w_clear);
         return;
     }
     assert(!ringbuffer_is_empty(&ps->ring_ssl2clear));
-
     char buf[RING_BUFFER_SIZE];
     char *next=ringbuffer_get(&ps->ring_ssl2clear,buf,&sz);
     t = send(fd, next, sz, MSG_NOSIGNAL);
@@ -1117,7 +1133,7 @@ static void clear_write(struct ev_loop *loop, ev_io *w, int revents) {
                 return; // dealloc'd
             }
             ev_io_stop(loop, &ps->ev_w_clear);
-            }
+        }
     }else {
         assert(t == -1);
         handle_socket_errno(ps, fd == ps->fd_down ? 1 : 0);
@@ -1384,7 +1400,6 @@ static void handle_fatal_ssl_error(proxystate *ps, int err, int backend) {
  * and buffer anything we get for writing to the backend */
 static void ssl_read(struct ev_loop *loop, ev_io *w, int revents) {
     (void) revents;
-    int t;
     proxystate *ps = (proxystate *)w->data;
     if (ps->want_shutdown) {
         ev_io_stop(loop, &ps->ev_r_ssl);
@@ -1394,7 +1409,7 @@ static void ssl_read(struct ev_loop *loop, ev_io *w, int revents) {
     ringbuffer_t *ring=&ps->ring_ssl2clear;
     int prev_len=ringbuffer_available_to_read(ring);
     // get previously buffered data 
-    int offset=prev_len,ret;
+    int offset=prev_len,ret=0;
     while(offset < sizeof(buf)){
         ret = SSL_read(ps->ssl, buf, sizeof(buf)-offset);
         if(ret <=0){
@@ -1409,15 +1424,34 @@ static void ssl_read(struct ev_loop *loop, ev_io *w, int revents) {
         return;
     }
 
-    if (t > 0) {
-        ringbuffer_advance_write_head(&ps->ring_ssl2clear, t);
-        if (ringbuffer_is_full(&ps->ring_ssl2clear))
-            ev_io_stop(loop, &ps->ev_r_ssl);
-        if (ps->clear_connected)
-            safe_enable_io(ps, &ps->ev_w_clear);
+    bool need_append=true;
+    if(ps->clear_connected  && (offset > 0)){
+        if(prev_len > 0){
+            ringbuffer_get2(ring,buf,prev_len);
+        }
+        int ret = send(ps->fd_down, buf, offset, MSG_NOSIGNAL);
+        if(ret > 0){
+            ringbuffer_advance_read_head(ring,ret < prev_len?ret:prev_len);
+            if(ret < offset){
+                //append data to ring
+                ringbuffer_append(ring,buf+ret,offset-ret);
+            }
+            need_append=false;
+        }
     }
-    else {
-        int err = SSL_get_error(ps->ssl, t);
+    if ((offset - prev_len) > 0) {
+        //ringbuffer_advance_write_head(&ps->ring_ssl2clear, (offset - prev_len));
+        if (ringbuffer_is_full(&ps->ring_ssl2clear)){
+            ev_io_stop(loop, &ps->ev_r_ssl);
+        }
+        if (ps->clear_connected){
+            safe_enable_io(ps, &ps->ev_w_clear);
+        }
+        if(need_append){
+            ringbuffer_append(ring,buf+prev_len,offset-prev_len);
+        }
+    }else if(ret < 0){
+        int err = SSL_get_error(ps->ssl, ret);
         if (err == SSL_ERROR_WANT_WRITE) {
             start_handshake(ps, err);
         }
