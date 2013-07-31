@@ -1048,59 +1048,74 @@ static void clear_read(struct ev_loop *loop, ev_io *w, int revents) {
 
     char buf[RING_BUFFER_SIZE-1];
     ringbuffer_t *ring=&ps->ring_clear2ssl;
-    int prev_len=ringbuffer_available_to_read(ring);
-    // get previously buffered data 
-    int offset=prev_len,ret;
-    while(offset < sizeof(buf)){
-      ret = recv(fd, buf+offset, sizeof(buf)-offset, 0);
-      if(ret <=0){
-        break;
-      }
-      offset+=ret;
-    }
-    if (likely(offset > 0)) {
-        bool need_append=true;
-        if (ps->handshaked){
-            //write the data
-            //check for other data waiting to be written and append and write it
-            if(prev_len > 0){
-                ringbuffer_get2(ring,buf,prev_len);
-            }
-            ret = SSL_write(ps->ssl, buf, offset);
-            if(likely(ret > 0)){
-                ringbuffer_advance_read_head(ring,ret < prev_len?ret:prev_len);
-                if(ret < offset){
-                    //append data to ring
-                    ringbuffer_append(ring,buf+ret,offset-ret);
-                }
-                need_append=false;
-            }else {
-                int err = SSL_get_error(ps->ssl, ret);
-                if (err == SSL_ERROR_WANT_READ){
-                    start_handshake(ps, err);
-                }else if (err == SSL_ERROR_WANT_WRITE) {
-                    /*  SSL socket is backed up */
-                }else{
-                    handle_fatal_ssl_error(ps, err, 1);
-                }
-            }
-        }
-        if(need_append){
-            ringbuffer_append(ring,buf+prev_len,offset-prev_len);
-        }
-        if (ps->handshaked){
-            safe_enable_io(ps, &ps->ev_w_ssl);
-        }
-        if (ringbuffer_is_full(ring)){
+    bool process_more_data=false;
+    do{
+        int prev_len=ringbuffer_available_to_read(ring);
+        // get previously buffered data 
+        if(unlikely(prev_len >= sizeof(buf))){
+            // the buffer is full
             ev_io_stop(loop, &ps->ev_r_clear);
+            break;
         }
-    }else if (ret  == 0) {
-        LOG("{%s} Connection closed\n", fd == ps->fd_down ? "backend" : "client");
-        shutdown_proxy(ps, SHUTDOWN_CLEAR);
-    }else if((errno!=EINTR) || (errno != EAGAIN)){
-        assert(ret == -1);
-        handle_socket_errno(ps, fd == ps->fd_down ? 1 : 0);
-    }
+        int offset=prev_len,ret;
+        process_more_data=false;
+        while(offset < sizeof(buf)){
+            ret = recv(fd, buf+offset, sizeof(buf)-offset, 0);
+            if(ret <=0){
+                break;
+            }
+            offset+=ret;
+        }
+        int saved_errno=errno;
+        if (likely(offset > 0)) {
+            bool need_append=true;
+            // we check if the other end is connected, we just forward it
+            if (ps->handshaked){
+                //write the data
+                //check for other data waiting to be written and append and write it
+                if(unlikely(prev_len > 0)){
+                    ringbuffer_get2(ring,buf,prev_len);
+                }
+                ret = SSL_write(ps->ssl, buf, offset);
+                if(likely(ret > 0)){
+                    ringbuffer_advance_read_head(ring,ret < prev_len?ret:prev_len);
+                    if(unlikely(ret < offset)){
+                        //append data to ring
+                        ringbuffer_append(ring,buf+ret,offset-ret);
+                    }
+                    need_append=false;
+                }else {
+                    int err = SSL_get_error(ps->ssl, ret);
+                    if (err == SSL_ERROR_WANT_READ){
+                        start_handshake(ps, err);
+                    }else if (err == SSL_ERROR_WANT_WRITE) {
+                        /*  SSL socket is backed up */
+                    }else{
+                        handle_fatal_ssl_error(ps, err, 1);
+                    }
+                }
+            }
+            if(need_append){
+                ringbuffer_append(ring,buf+prev_len,offset-prev_len);
+            }
+            if (ps->handshaked){
+                safe_enable_io(ps, &ps->ev_w_ssl);
+            }
+            if (ringbuffer_is_full(ring)){
+                ev_io_stop(loop, &ps->ev_r_clear);
+            }
+        }
+        if(ret > 0){
+            // we filled the buffer, but there may be more data to read
+            process_more_data=true;
+        }else if (ret  == 0) {
+            LOG("{%s} Connection closed\n", fd == ps->fd_down ? "backend" : "client");
+            shutdown_proxy(ps, SHUTDOWN_CLEAR);
+        }else if((saved_errno!=EINTR) || (saved_errno!= EAGAIN)){
+            assert(ret == -1);
+            handle_socket_errno(ps, fd == ps->fd_down ? 1 : 0);
+        }
+    }while(process_more_data);
 }
 
 /* Write some data, previously received on the secure upstream socket,
@@ -1122,7 +1137,7 @@ static void clear_write(struct ev_loop *loop, ev_io *w, int revents) {
     char *next=ringbuffer_get(&ps->ring_ssl2clear,buf,&sz);
     t = send(fd, next, sz, MSG_NOSIGNAL);
 
-    if (t > 0) {
+    if (likely(t > 0)) {
         ringbuffer_advance_read_head(ring,t);
         if (t == sz) {
             if (ps->handshaked){
@@ -1439,18 +1454,16 @@ static void ssl_read(struct ev_loop *loop, ev_io *w, int revents) {
             need_append=false;
         }
     }
-    if ((offset - prev_len) > 0) {
-        //ringbuffer_advance_write_head(&ps->ring_ssl2clear, (offset - prev_len));
+    if (need_append) {
+        ringbuffer_append(ring,buf+prev_len,offset-prev_len);
         if (ringbuffer_is_full(&ps->ring_ssl2clear)){
             ev_io_stop(loop, &ps->ev_r_ssl);
         }
         if (ps->clear_connected){
             safe_enable_io(ps, &ps->ev_w_clear);
         }
-        if(need_append){
-            ringbuffer_append(ring,buf+prev_len,offset-prev_len);
-        }
-    }else if(ret < 0){
+    }
+    if(ret < 0){
         int err = SSL_get_error(ps->ssl, ret);
         if (err == SSL_ERROR_WANT_WRITE) {
             start_handshake(ps, err);
