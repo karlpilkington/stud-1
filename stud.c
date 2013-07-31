@@ -299,13 +299,13 @@ static void settcpkeepalive(int fd) {
     if(setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &optval, optlen) < 0) {
         ERR("Error activating SO_KEEPALIVE on client socket: %s", strerror(errno));
     }
-#ifdef TCP_KEEPIDLE
+/*  #ifdef TCP_KEEPIDLE
     optval = CONFIG->TCP_KEEPALIVE_TIME;
     optlen = sizeof(optval);
     if(setsockopt(fd, SOL_TCP, TCP_KEEPALIVE, &optval, optlen) < 0) {
         ERR("Error setting TCP_KEEPALIVE on client socket: %s", strerror(errno));
     }
-#endif 
+#endif  */
 }
 
 static void fail(const char* s) {
@@ -1126,15 +1126,15 @@ static void clear_write(struct ev_loop *loop, ev_io *w, int revents) {
     proxystate *ps = (proxystate *)w->data;
     int fd = w->fd;
     int sz;
-    ringbuffer_t *ring=&ps->ring_clear2ssl;
+    ringbuffer_t *ring=&ps->ring_ssl2clear;
 
-    if(unlikely(ringbuffer_is_empty(&ps->ring_ssl2clear))){
+    if(unlikely(ringbuffer_is_empty(ring))){
         ev_io_stop(loop, &ps->ev_w_clear);
         return;
     }
-    assert(!ringbuffer_is_empty(&ps->ring_ssl2clear));
+    assert(!ringbuffer_is_empty(ring));
     char buf[RING_BUFFER_SIZE];
-    char *next=ringbuffer_get(&ps->ring_ssl2clear,buf,&sz);
+    char *next=ringbuffer_get(ring,buf,&sz);
     t = send(fd, next, sz, MSG_NOSIGNAL);
 
     if (likely(t > 0)) {
@@ -1482,6 +1482,10 @@ static void ssl_write(struct ev_loop *loop, ev_io *w, int revents) {
     int sz;
     proxystate *ps = (proxystate *)w->data;
     ringbuffer_t *ring=&ps->ring_clear2ssl;
+    if(unlikely(ringbuffer_is_empty(ring))){
+        ev_io_stop(loop, &ps->ev_w_ssl);
+        return;
+    }
     assert(!ringbuffer_is_empty(ring));
     char buf[RING_BUFFER_SIZE];
     char * next = ringbuffer_get(ring, buf, &sz);
