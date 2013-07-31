@@ -1070,7 +1070,7 @@ static void clear_read(struct ev_loop *loop, ev_io *w, int revents) {
         if (likely(offset > 0)) {
             bool need_append=true;
             // we check if the other end is connected, we just forward it
-            if (ps->handshaked){
+            if (likely(ps->handshaked)){
                 //write the data
                 //check for other data waiting to be written and append and write it
                 if(unlikely(prev_len > 0)){
@@ -1098,11 +1098,9 @@ static void clear_read(struct ev_loop *loop, ev_io *w, int revents) {
             if(need_append){
                 ringbuffer_append(ring,buf+prev_len,offset-prev_len);
             }
-            if (ps->handshaked){
-                safe_enable_io(ps, &ps->ev_w_ssl);
-            }
             if (ringbuffer_is_full(ring)){
                 ev_io_stop(loop, &ps->ev_r_clear);
+                break;
             }
         }
         if(ret > 0){
@@ -1116,6 +1114,9 @@ static void clear_read(struct ev_loop *loop, ev_io *w, int revents) {
             handle_socket_errno(ps, fd == ps->fd_down ? 1 : 0);
         }
     }while(process_more_data);
+    if (unlikely(!ringbuffer_is_empty(ring) && ps->handshaked)){
+        safe_enable_io(ps, &ps->ev_w_ssl);
+    }
 }
 
 /* Write some data, previously received on the secure upstream socket,
@@ -1416,7 +1417,7 @@ static void handle_fatal_ssl_error(proxystate *ps, int err, int backend) {
 static void ssl_read(struct ev_loop *loop, ev_io *w, int revents) {
     (void) revents;
     proxystate *ps = (proxystate *)w->data;
-    if (ps->want_shutdown) {
+    if (unlikely(ps->want_shutdown)) {
         ev_io_stop(loop, &ps->ev_r_ssl);
         return;
     }
@@ -1440,27 +1441,24 @@ static void ssl_read(struct ev_loop *loop, ev_io *w, int revents) {
     }
 
     bool need_append=true;
-    if(ps->clear_connected  && (offset > 0)){
-        if(prev_len > 0){
+    if(likely(ps->clear_connected  && (offset > 0))){
+        if(unlikely(prev_len > 0)){
             ringbuffer_get2(ring,buf,prev_len);
         }
         int ret = send(ps->fd_down, buf, offset, MSG_NOSIGNAL);
-        if(ret > 0){
+        if(likely(ret > 0)){
             ringbuffer_advance_read_head(ring,ret < prev_len?ret:prev_len);
-            if(ret < offset){
+            if(unlikely(ret < offset)){
                 //append data to ring
                 ringbuffer_append(ring,buf+ret,offset-ret);
             }
             need_append=false;
         }
     }
-    if (need_append) {
+    if (unlikely(need_append)) {
         ringbuffer_append(ring,buf+prev_len,offset-prev_len);
-        if (ringbuffer_is_full(&ps->ring_ssl2clear)){
+        if (ringbuffer_is_full(ring)){
             ev_io_stop(loop, &ps->ev_r_ssl);
-        }
-        if (ps->clear_connected){
-            safe_enable_io(ps, &ps->ev_w_clear);
         }
     }
     if(ret < 0){
@@ -1471,6 +1469,9 @@ static void ssl_read(struct ev_loop *loop, ev_io *w, int revents) {
         else if (err == SSL_ERROR_WANT_READ) { } /* incomplete SSL data */
         else
             handle_fatal_ssl_error(ps, err, w->fd == ps->fd_up ? 0 : 1);
+    }
+    if (unlikely(!ringbuffer_is_empty(ring) && (ps->clear_connected))){
+        safe_enable_io(ps, &ps->ev_w_clear);
     }
 }
 
