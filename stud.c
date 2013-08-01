@@ -972,7 +972,8 @@ static inline void safe_enable_io(proxystate *ps, ev_io *w) {
 /* Only enable a libev ev_io event if the proxied connection still
  * has both up and down connected */
 static void shutdown_proxy(proxystate *ps, SHUTDOWN_REQUESTOR req) {
-    if (ps->want_shutdown || req == SHUTDOWN_HARD) {
+    if (ps->want_shutdown || (req == SHUTDOWN_HARD) || (req == SHUTDOWN_CLEAR && ringbuffer_is_empty(&ps->ring_clear2ssl)) || 
+            (req == SHUTDOWN_SSL && ringbuffer_is_empty(&ps->ring_ssl2clear))) {
         ev_io_stop(loop, &ps->ev_w_ssl);
         ev_io_stop(loop, &ps->ev_r_ssl);
         ev_io_stop(loop, &ps->ev_w_handshake);
@@ -987,6 +988,7 @@ static void shutdown_proxy(proxystate *ps, SHUTDOWN_REQUESTOR req) {
 
         SSL_set_shutdown(ps->ssl, SSL_SENT_SHUTDOWN);
         SSL_free(ps->ssl);
+        ERR_clear_error();
 
         /* Make use-after-free fail immediately */
         ps->fd_up = -1;
@@ -997,10 +999,6 @@ static void shutdown_proxy(proxystate *ps, SHUTDOWN_REQUESTOR req) {
     }
     else {
         ps->want_shutdown = 1;
-        if (req == SHUTDOWN_CLEAR && ringbuffer_is_empty(&ps->ring_clear2ssl))
-            shutdown_proxy(ps, SHUTDOWN_HARD);
-        else if (req == SHUTDOWN_SSL && ringbuffer_is_empty(&ps->ring_ssl2clear))
-            shutdown_proxy(ps, SHUTDOWN_HARD);
     }
 }
 
@@ -1461,7 +1459,7 @@ static void ssl_read(struct ev_loop *loop, ev_io *w, int revents) {
             ev_io_stop(loop, &ps->ev_r_ssl);
         }
     }
-    if(ret < 0){
+    if(ret <= 0){
         int err = SSL_get_error(ps->ssl, ret);
         if (err == SSL_ERROR_WANT_WRITE) {
             start_handshake(ps, err);
@@ -1470,7 +1468,7 @@ static void ssl_read(struct ev_loop *loop, ev_io *w, int revents) {
         else
             handle_fatal_ssl_error(ps, err, w->fd == ps->fd_up ? 0 : 1);
     }
-    if (unlikely(!ringbuffer_is_empty(ring) && (ps->clear_connected))){
+    if (unlikely(!(ringbuffer_is_empty(ring)) && (ps->clear_connected))){
         safe_enable_io(ps, &ps->ev_w_clear);
     }
 }
