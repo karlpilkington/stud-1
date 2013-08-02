@@ -1076,7 +1076,7 @@ static void clear_read(struct ev_loop *loop, ev_io *w, int revents) {
                 if(unlikely(prev_len > 0)){
                     ringbuffer_get2(ring,buf,prev_len);
                 }
-                ret = SSL_write(ps->ssl, buf, offset);
+                int ret = SSL_write(ps->ssl, buf, offset);
                 if(likely(ret > 0)){
                     ringbuffer_advance_read_head(ring,ret < prev_len?ret:prev_len);
                     if(unlikely(ret < offset)){
