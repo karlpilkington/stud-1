@@ -1095,24 +1095,27 @@ static void clear_read(struct ev_loop *loop, ev_io *w, int revents) {
                     }
                 }
             }
-            if(need_append){
+            if(unlikely(need_append)){
                 ringbuffer_append(ring,buf+prev_len,offset-prev_len);
             }
-            if (ringbuffer_is_full(ring)){
+            if (unlikely(ringbuffer_is_full(ring))){
                 ev_io_stop(loop, &ps->ev_r_clear);
                 break;
             }
         }
-        if(ret > 0){
+        if(likely(ret==-1)){
+             if(unlikely((saved_errno!=EWOULDBLOCK) || (saved_errno!=EINTR) || (saved_errno!= EAGAIN))){
+                assert(ret == -1);
+                errno=saved_errno;
+                handle_socket_errno(ps, fd == ps->fd_down ? 1 : 0);
+            }
+        }else if(ret > 0){
             // we filled the buffer, but there may be more data to read
             process_more_data=true;
         }else if (ret  == 0) {
             LOG("{%s} Connection closed\n", fd == ps->fd_down ? "backend" : "client");
             shutdown_proxy(ps, SHUTDOWN_CLEAR);
-        }else if((saved_errno!=EINTR) || (saved_errno!= EAGAIN)){
-            assert(ret == -1);
-            handle_socket_errno(ps, fd == ps->fd_down ? 1 : 0);
-        }
+        }   
     }while(process_more_data);
     if (unlikely(!ringbuffer_is_empty(ring) && ps->handshaked)){
         safe_enable_io(ps, &ps->ev_w_ssl);
