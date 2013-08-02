@@ -5,3 +5,4 @@ core.*
 *.o
 stud_provider.h
 stud
+deps
