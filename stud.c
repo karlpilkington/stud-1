@@ -1060,7 +1060,7 @@ static void clear_read(struct ev_loop *loop, ev_io *w, int revents) {
         int offset=prev_len,ret;
         process_more_data=false;
         while(offset < sizeof(buf)){
-            ret = recv(fd, buf+offset, sizeof(buf)-offset, 0);
+            ret = read(fd, buf+offset, sizeof(buf)-offset);
             if(ret <=0){
                 break;
             }
@@ -1104,7 +1104,7 @@ static void clear_read(struct ev_loop *loop, ev_io *w, int revents) {
             }
         }
         if(likely(ret==-1)){
-             if(unlikely((saved_errno!=EWOULDBLOCK) || (saved_errno!=EINTR) || (saved_errno!= EAGAIN))){
+             if(unlikely((saved_errno!= EAGAIN) || (saved_errno!=EWOULDBLOCK) || (saved_errno!=EINTR))){
                 assert(ret == -1);
                 errno=saved_errno;
                 handle_socket_errno(ps, fd == ps->fd_down ? 1 : 0);
