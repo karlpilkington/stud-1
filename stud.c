@@ -1429,7 +1429,7 @@ static void ssl_read(struct ev_loop *loop, ev_io *w, int revents) {
     //fprintf(stdout,"prev_len:%d\n",prev_len);
     while(offset < sizeof(buf)){
         ret = SSL_read(ps->ssl, buf+offset, sizeof(buf)-offset);
-        write(STDOUT_FILENO,buf+offset,ret);
+        //write(STDOUT_FILENO,buf+offset,ret);
         if(ret <=0){
             break;
         }
@@ -1451,7 +1451,7 @@ static void ssl_read(struct ev_loop *loop, ev_io *w, int revents) {
             ringbuffer_get2(ring,buf,prev_len);
         }
         int ret = send(ps->fd_down, buf, offset, MSG_NOSIGNAL);
-        write(STDOUT_FILENO,buf,offset);
+        //write(STDOUT_FILENO,buf,offset);
         if(likely(ret > 0)){
             ringbuffer_advance_read_head(ring,ret < prev_len?ret:prev_len);
             if(unlikely(ret < offset)){
