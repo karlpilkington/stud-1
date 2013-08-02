@@ -159,7 +159,7 @@ static inline bool ringbuffer_is_full(const ringbuffer_t *r){
   return ((r->tail+1)&(RING_BUFFER_SIZE-1)) == r->head;
 }
 static inline int ringbuffer_available_to_write(const ringbuffer_t *r){
-  return (r->tail + RING_BUFFER_SIZE - r->head -1)&(RING_BUFFER_SIZE-1);
+  return (r->head + RING_BUFFER_SIZE - r->tail -1)&(RING_BUFFER_SIZE-1);
 }
 static inline int ringbuffer_available_to_read(const ringbuffer_t *r){
   return (r->tail + RING_BUFFER_SIZE - r->head)&(RING_BUFFER_SIZE-1);
@@ -170,6 +170,8 @@ int ringbuffer_append(ringbuffer_t *r, const char *buf, int len){
     return 0;
   }
   int max_bytes=ringbuffer_available_to_write(r);
+  //fprintf(stdout,"len=%d,max_bytes=%d\n",len,max_bytes);
+  //fflush(stdout);
   len=(len > max_bytes)?max_bytes:len;
   if(len > (RING_BUFFER_SIZE-r->tail)){
     int first_chunk=RING_BUFFER_SIZE-r->tail;
@@ -1424,13 +1426,18 @@ static void ssl_read(struct ev_loop *loop, ev_io *w, int revents) {
     int prev_len=ringbuffer_available_to_read(ring);
     // get previously buffered data 
     int offset=prev_len,ret=0;
+    //fprintf(stdout,"prev_len:%d\n",prev_len);
     while(offset < sizeof(buf)){
-        ret = SSL_read(ps->ssl, buf, sizeof(buf)-offset);
+        ret = SSL_read(ps->ssl, buf+offset, sizeof(buf)-offset);
+        write(STDOUT_FILENO,buf+offset,ret);
         if(ret <=0){
             break;
         }
+        //fprintf(stdout,"ret:%d\n",ret);
         offset+=ret;
     }
+    //fprintf(stdout,"offset:%d avail_to_read:%d\n",offset,ringbuffer_available_to_read(ring));
+    //fflush(stdout);
 
     /* Fix CVE-2009-3555. Disable reneg if started by client. */
     if (ps->renegotiation) {
@@ -1444,6 +1451,7 @@ static void ssl_read(struct ev_loop *loop, ev_io *w, int revents) {
             ringbuffer_get2(ring,buf,prev_len);
         }
         int ret = send(ps->fd_down, buf, offset, MSG_NOSIGNAL);
+        write(STDOUT_FILENO,buf,offset);
         if(likely(ret > 0)){
             ringbuffer_advance_read_head(ring,ret < prev_len?ret:prev_len);
             if(unlikely(ret < offset)){
@@ -1471,6 +1479,8 @@ static void ssl_read(struct ev_loop *loop, ev_io *w, int revents) {
     if (unlikely(!(ringbuffer_is_empty(ring)) && (ps->clear_connected))){
         safe_enable_io(ps, &ps->ev_w_clear);
     }
+    //fprintf(stdout,"offset:%d avail_to_read:%d\n",offset,ringbuffer_available_to_read(ring));
+    //fflush(stdout);
 }
 
 /* Write some previously-buffered backend data upstream on the
