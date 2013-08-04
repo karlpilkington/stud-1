@@ -1050,6 +1050,10 @@ static void clear_write(struct ev_loop *loop, ev_io *w, int revents) {
     (void) revents;
     int t;
     proxystate *ps = (proxystate *)w->data;
+    if(unlikely(ps->fd_down==-1)){
+        // the connection is closed
+        return;
+    }
     int fd = w->fd;
     int sz;
     ringbuffer_t *ring=&ps->ring_ssl2clear;
@@ -1415,6 +1419,10 @@ static void ssl_write(struct ev_loop *loop, ev_io *w, int revents) {
     int t;
     int sz;
     proxystate *ps = (proxystate *)w->data;
+    if(unlikely(ps->ssl==NULL)){
+        //the connection has been closed
+        return;
+    }
     ringbuffer_t *ring=&ps->ring_clear2ssl;
     if(unlikely(ringbuffer_is_empty(ring))){
         ev_io_stop(loop, &ps->ev_w_ssl);
