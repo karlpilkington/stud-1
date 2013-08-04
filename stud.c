@@ -70,7 +70,7 @@ char *inet_ntoa_r(const struct in_addr in, char *buffer, int buflen);
 #include <ev.h>
 
 #include "stud_provider.h"
-//#include "ringbuffer.h"
+#include "ringbuffer.h"
 #include "shctx.h"
 #include "configuration.h"
 
@@ -142,84 +142,6 @@ static ctx_list *sni_ctxs;
 
 #define likely(x) __builtin_expect((x),1)
 #define unlikely(x) __builtin_expect((x),0)
-#define RING_BUFFER_SIZE (16*1024)
-
-typedef struct {
-  int head,tail;
-  char buf[RING_BUFFER_SIZE];
-}ringbuffer_t;
-
-static inline void ringbuffer_init(ringbuffer_t * __restrict r){
-    r->head=r->tail=0;
-}
-static inline bool ringbuffer_is_empty(const ringbuffer_t *r){
-  return r->head==r->tail;
-}
-static inline bool ringbuffer_is_full(const ringbuffer_t *r){
-  return ((r->tail+1)&(RING_BUFFER_SIZE-1)) == r->head;
-}
-static inline int ringbuffer_available_to_write(const ringbuffer_t *r){
-  return (r->head + RING_BUFFER_SIZE - r->tail -1)&(RING_BUFFER_SIZE-1);
-}
-static inline int ringbuffer_available_to_read(const ringbuffer_t *r){
-  return (r->tail + RING_BUFFER_SIZE - r->head)&(RING_BUFFER_SIZE-1);
-}
-
-int ringbuffer_append(ringbuffer_t *r, const char *buf, int len){
-  if(ringbuffer_is_full(r)){
-    return 0;
-  }
-  int max_bytes=ringbuffer_available_to_write(r);
-  //fprintf(stdout,"len=%d,max_bytes=%d\n",len,max_bytes);
-  //fflush(stdout);
-  len=(len > max_bytes)?max_bytes:len;
-  if(len > (RING_BUFFER_SIZE-r->tail)){
-    int first_chunk=RING_BUFFER_SIZE-r->tail;
-    memcpy(r->buf+r->tail,buf,first_chunk);
-    memcpy(r->buf,buf+first_chunk,len-first_chunk);
-    r->tail=(r->tail+len)&(RING_BUFFER_SIZE-1);
-  }else{
-    memcpy(r->buf+r->tail,buf,len);
-    r->tail+=len;
-  }
-  return len;
-}
-
-char *ringbuffer_get(ringbuffer_t * __restrict r, char * __restrict buf, int *output_len){
-    int len=ringbuffer_available_to_read(r);
-    *output_len=len;
-    if(len > RING_BUFFER_SIZE-r->head){
-        int first_chunk=RING_BUFFER_SIZE-r->tail;
-        memcpy(buf,r->buf+r->head,first_chunk);
-        memcpy(buf+first_chunk,r->buf,len-first_chunk);
-        return buf;
-    }
-    return r->buf;
-}
-
-void ringbuffer_get2(ringbuffer_t * __restrict r, char * __restrict buf, int len){
-    if(len > RING_BUFFER_SIZE-r->head){
-        int first_chunk=RING_BUFFER_SIZE-r->tail;
-        memcpy(buf,r->buf+r->head,first_chunk);
-        memcpy(buf+first_chunk,r->buf,len-first_chunk);
-    }else{
-        memcpy(buf,r->buf+r->head,len);
-    }
-}
-
-void ringbuffer_advance_read_head(ringbuffer_t * __restrict r, int len){
-    r->head=(r->head+len)&(RING_BUFFER_SIZE-1);
-    if(r->head==r->tail){
-        r->head=r->tail=0;
-    }
-}
-void ringbuffer_advance_write_head(ringbuffer_t * __restrict r, int len){
-    r->tail=(r->tail+len)&(RING_BUFFER_SIZE-1);
-}
-char *ringbuffer_write_ptr(ringbuffer_t * __restrict r){
-    return r->buf+r->tail;
-}
-
 /*
  * Proxied State
  *
@@ -1046,7 +968,7 @@ static void clear_read(struct ev_loop *loop, ev_io *w, int revents) {
     }
     int fd = w->fd;
 
-    char buf[RING_BUFFER_SIZE-1];
+    char buf[RINGBUFFER_SIZE-1];
     ringbuffer_t *ring=&ps->ring_clear2ssl;
     bool process_more_data=false;
     do{
@@ -1137,7 +1059,7 @@ static void clear_write(struct ev_loop *loop, ev_io *w, int revents) {
         return;
     }
     assert(!ringbuffer_is_empty(ring));
-    char buf[RING_BUFFER_SIZE];
+    char buf[RINGBUFFER_SIZE];
     char *next=ringbuffer_get(ring,buf,&sz);
     t = send(fd, next, sz, MSG_NOSIGNAL);
 
@@ -1270,7 +1192,7 @@ static void end_handshake(proxystate *ps) {
             if(likely(ps->remote_ip.ss_family == AF_INET)) {
                struct sockaddr_in* addr = (struct sockaddr_in*)&ps->remote_ip;
                written = snprintf(ring_pnt,
-                                  RING_BUFFER_SIZE,
+                                  RINGBUFFER_SIZE,
                                   tcp_proxy_line,
                                   "TCP4",
                                   inet_ntoa(addr->sin_addr),
@@ -1280,7 +1202,7 @@ static void end_handshake(proxystate *ps) {
                         struct sockaddr_in6* addr = (struct sockaddr_in6*)&ps->remote_ip;
                         inet_ntop(AF_INET6,&(addr->sin6_addr),tcp6_address_string,INET6_ADDRSTRLEN);
                         written = snprintf(ring_pnt,
-                                  RING_BUFFER_SIZE,
+                                  RINGBUFFER_SIZE,
                                   tcp_proxy_line,
                                   "TCP6",
                                   tcp6_address_string,
@@ -1377,7 +1299,7 @@ static void client_handshake(struct ev_loop *loop, ev_io *w, int revents) {
     proxystate *ps = (proxystate *)w->data;
 
     t = SSL_do_handshake(ps->ssl);
-    if (t == 1) {
+    if (likely(t == 1)) {
         end_handshake(ps);
     }
     else {
@@ -1424,7 +1346,7 @@ static void ssl_read(struct ev_loop *loop, ev_io *w, int revents) {
         ev_io_stop(loop, &ps->ev_r_ssl);
         return;
     }
-    char buf[RING_BUFFER_SIZE-1];
+    char buf[RINGBUFFER_SIZE-1];
     ringbuffer_t *ring=&ps->ring_ssl2clear;
     int prev_len=ringbuffer_available_to_read(ring);
     // get previously buffered data 
@@ -1499,7 +1421,7 @@ static void ssl_write(struct ev_loop *loop, ev_io *w, int revents) {
         return;
     }
     assert(!ringbuffer_is_empty(ring));
-    char buf[RING_BUFFER_SIZE];
+    char buf[RINGBUFFER_SIZE];
     char * next = ringbuffer_get(ring, buf, &sz);
     t = SSL_write(ps->ssl, next, sz);
     if (t > 0) {
