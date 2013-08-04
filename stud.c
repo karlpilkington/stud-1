@@ -1488,10 +1488,10 @@ static void handle_accept(struct ev_loop *loop, ev_io *w, int revents) {
 
     int flag = 1;
     int ret ;
-   /*   setsockopt(client, IPPROTO_TCP, TCP_NODELAY, (char *)&flag, sizeof(flag) );
+    setsockopt(client, IPPROTO_TCP, TCP_NODELAY, (char *)&flag, sizeof(flag) );
     if (ret == -1) {
       perror("Couldn't setsockopt on client (TCP_NODELAY)\n");
-    } */
+    }
 #ifdef TCP_CWND
     int cwnd = 10;
     ret = setsockopt(client, IPPROTO_TCP, TCP_CWND, &cwnd, sizeof(cwnd));
