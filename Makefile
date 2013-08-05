@@ -9,7 +9,7 @@ MANDIR  = $(PREFIX)/share/man
 
 LDFLAGS=-g -lm -lsocket -lnsl -m64 -L/opt/local/lib -Wl,-R/opt/local/lib
 CC=gcc
-CFLAGS=-O2 -m64 -Ideps/libev -Ideps/openssl/include -g -march=native
+CFLAGS=-O2 -m64 -Ideps/libev -Ideps/openssl/include -g -march=native -DNDEBUG
 OBJS    =stud_provider.o stud.o configuration.o \
 				 deps/libev/.libs/libev.a deps/openssl/libssl.a deps/openssl/libcrypto.a
 
