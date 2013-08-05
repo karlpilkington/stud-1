@@ -1289,7 +1289,7 @@ static void client_proxy_proxy(struct ev_loop *loop, ev_io *w, int revents) {
 
         char *ring = ringbuffer_write_ptr(&ps->ring_ssl2clear);
         memcpy(ring, tcp_proxy_line, proxy - tcp_proxy_line);
-        ringbuffer_advance_write_head(&ps->ring_ssl2clear, proxy - tcp_proxy_line);
+        ringbuffer_advance_write_head(ring, proxy - tcp_proxy_line);
 
         // Finished reading the PROXY header
         if (*(proxy - 1) == '\n') {
