@@ -1404,6 +1404,7 @@ static void ssl_read(struct ev_loop *loop, ev_io *w, int revents) {
             //for simplicity we just reset the ring 
             //we should probably flush the data first
             //but ssl_write may itself fail and we are keeping it simple
+            ringbuffer_reset(&ps->ring_clear2ssl);
             return handle_socket_errno(ps,1);
         }
     }
