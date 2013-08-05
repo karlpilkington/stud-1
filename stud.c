@@ -927,7 +927,7 @@ static void shutdown_proxy(proxystate *ps, SHUTDOWN_REQUESTOR req) {
 }
 
 /* Handle various socket errors */
-static void handle_socket_errno(proxystate *ps, int backend) {
+static inline void handle_socket_errno(proxystate *ps, int backend) {
     if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
         return;
 
@@ -1013,7 +1013,18 @@ static void clear_read(struct ev_loop *loop, ev_io *w, int revents) {
                     }else if (err == SSL_ERROR_WANT_WRITE) {
                         /*  SSL socket is backed up */
                     }else{
-                        handle_fatal_ssl_error(ps, err, 1);
+                        //remote end has closed connection
+                        //we have to write out anything that client has written 
+                        //but we have not sent to backend
+                        ringbuffer_t *ring2=&ps->ring_ssl2clear;
+                        int unwritten=ringbuffer_available_to_read(ring2);
+                        if(unlikely(unwritten > 0)){
+                            char tmpbuf[unwritten];
+                            ringbuffer_get2(ring2,tmpbuf,unwritten);
+                            send(ps->fd_down, tmpbuf, unwritten, MSG_NOSIGNAL);
+                            ringbuffer_reset(ring2);
+                        }
+                        return handle_fatal_ssl_error(ps, err, 0);
                     }
                 }
             }
@@ -1388,6 +1399,12 @@ static void ssl_read(struct ev_loop *loop, ev_io *w, int revents) {
                 ringbuffer_append(ring,buf+ret,offset-ret);
             }
             need_append=false;
+        }else if (unlikely(!(errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR))){
+            //George: backend is gone, we need to flush any backend data to client
+            //for simplicity we just reset the ring 
+            //we should probably flush the data first
+            //but ssl_write may itself fail and we are keeping it simple
+            return handle_socket_errno(ps,1);
         }
     }
     if (unlikely(need_append)) {
