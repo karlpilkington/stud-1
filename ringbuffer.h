@@ -98,5 +98,8 @@ void ringbuffer_advance_write_head(ringbuffer_t * __restrict r, int len){
 char *ringbuffer_write_ptr(ringbuffer_t * __restrict r){
     return r->buf+r->tail;
 }
+void ringbuffer_reset(ringbuffer_t * __restrict r){
+    r->head=r->tail=0;
+}
 
 #endif
