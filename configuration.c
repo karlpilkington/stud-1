@@ -537,7 +537,7 @@ int config_param_shcupd_peer (char *str, stud_config *cfg) {
 
 #endif /* USE_SHARED_CACHE */
 
-void config_param_validate (char *k, char *v, stud_config *cfg, char *file, int line) {
+void config_param_validate (const char *k, char *v, stud_config *cfg, char *file, int line) {
   int r = 1;
   struct stat st;
 
@@ -798,7 +798,7 @@ char * config_disp_gid (gid_t gid) {
   return tmp_buf;
 }
 
-char * config_disp_hostport (char *host, char *port) {
+const char * config_disp_hostport (char *host, char *port) {
   memset(tmp_buf, '\0', sizeof(tmp_buf));
   if (host == NULL && port == NULL)
     return "";
