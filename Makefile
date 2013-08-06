@@ -10,7 +10,7 @@ MANDIR  = $(PREFIX)/share/man
 LDFLAGS=-g -lm -lsocket -lnsl -m64 -L/opt/local/lib -Wl,-R/opt/local/lib
 CC=gcc
 CXX=g++
-CFLAGS=-O2 -m64 -Ideps/libev -Ideps/openssl/include -g -march=native -DNDEBUG
+CPPFLAGS=-O2 -m64 -Ideps/libev -Ideps/openssl/include -g -march=native -DNDEBUG -std=c++0x -fpermissive
 OBJS    =stud_provider.o stud.o configuration.o \
 				 deps/libev/.libs/libev.a deps/openssl/libssl.a deps/openssl/libcrypto.a
 
@@ -18,7 +18,7 @@ all: realall
 
 # Shared cache feature
 ifneq ($(USE_SHARED_CACHE),)
-CFLAGS += -DUSE_SHARED_CACHE -DUSE_SYSCALL_FUTEX
+CPPFLAGS += -DUSE_SHARED_CACHE -DUSE_SYSCALL_FUTEX
 OBJS   += shctx.o ebtree/libebtree.a
 ALL    += ebtree
 
@@ -33,7 +33,7 @@ endif
 
 # No config file support?
 ifneq ($(NO_CONFIG_FILE),)
-CFLAGS += -DNO_CONFIG_FILE
+CPPFLAGS += -DNO_CONFIG_FILE
 endif
 
 stud_provider.h: stud_provider.d
@@ -48,7 +48,7 @@ ALL += stud
 realall: $(ALL)
 
 stud: $(OBJS)
-	$(CXX)  $(CFLAGS) -o $@ $^ $(LDFLAGS)
+	$(CXX)  $(CPPFLAGS) -o $@ $^ $(LDFLAGS)
 
 deps/libev/.libs/libev.a: deps/libev/Makefile
 	$(MAKE) $(MAKEFLAGS) -C deps/libev
