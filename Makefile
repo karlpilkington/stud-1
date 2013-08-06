@@ -9,6 +9,7 @@ MANDIR  = $(PREFIX)/share/man
 
 LDFLAGS=-g -lm -lsocket -lnsl -m64 -L/opt/local/lib -Wl,-R/opt/local/lib
 CC=gcc
+CXX=g++
 CFLAGS=-O2 -m64 -Ideps/libev -Ideps/openssl/include -g -march=native -DNDEBUG
 OBJS    =stud_provider.o stud.o configuration.o \
 				 deps/libev/.libs/libev.a deps/openssl/libssl.a deps/openssl/libcrypto.a
@@ -47,7 +48,7 @@ ALL += stud
 realall: $(ALL)
 
 stud: $(OBJS)
-	$(CC)  $(CFLAGS) -o $@ $^ $(LDFLAGS)
+	$(CXX)  $(CFLAGS) -o $@ $^ $(LDFLAGS)
 
 deps/libev/.libs/libev.a: deps/libev/Makefile
 	$(MAKE) $(MAKEFLAGS) -C deps/libev

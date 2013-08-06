@@ -73,6 +73,7 @@ char *inet_ntoa_r(const struct in_addr in, char *buffer, int buflen);
 #include "ringbuffer.h"
 #include "shctx.h"
 #include "configuration.h"
+#include "SimpleMemoryPool.hpp"
 
 #ifndef MSG_NOSIGNAL
 # define MSG_NOSIGNAL 0
@@ -178,6 +179,8 @@ typedef struct proxystate {
     ringbuffer_t ring_ssl2clear;
     ringbuffer_t ring_clear2ssl;
 } proxystate;
+
+SimpleMemoryPool <proxystate,8192> SPool;
 
 #define LOG(...)                                            \
     do {                                                    \
@@ -919,7 +922,8 @@ static void shutdown_proxy(proxystate *ps, SHUTDOWN_REQUESTOR req) {
         ps->fd_down = -1;
         ps->ssl = NULL;
 
-        free(ps);
+        //free(ps);
+        SPool.Release(ps);
     }
     else {
         ps->want_shutdown = 1;
@@ -1539,7 +1543,8 @@ static void handle_accept(struct ev_loop *loop, ev_io *w, int revents) {
     SSL_set_accept_state(ssl);
     SSL_set_fd(ssl, client);
 
-    proxystate *ps = (proxystate *)malloc(sizeof(proxystate));
+    //proxystate *ps = (proxystate *)malloc(sizeof(proxystate));
+    proxystate *ps = SPool.Get();
 
     ps->fd_up = client;
     ps->fd_down = back;
