@@ -50,10 +50,11 @@
 #include <stdarg.h>
 #include <stdbool.h>
 
+char *inet_ntoa_r(const struct in_addr in, char *buffer, socklen_t buflen);
 #ifdef __sun
 #include <sys/filio.h>
 #include <sys/signal.h>
-char *inet_ntoa_r(const struct in_addr in, char *buffer, int buflen);
+char *inet_ntoa_r(const struct in_addr in, char *buffer, socklen_t buflen);
 #endif
 
 #include <ctype.h>
@@ -728,7 +729,7 @@ void init_openssl() {
 #define PUSH_CTX(asn1_str, ctx)                                             \
     do {                                                                    \
         struct ctx_list *cl;                                                \
-        cl = calloc(1, sizeof(*cl));                                        \
+        cl = (struct ctx_list *)calloc(1, sizeof(*cl));                                        \
         ASN1_STRING_to_UTF8((unsigned char **)&cl->servername, asn1_str);   \
         cl->ctx = ctx;                                                      \
         cl->next = sni_ctxs;                                                \
@@ -749,7 +750,7 @@ void init_openssl() {
         BIO_free(f);
 
         // First, look for Subject Alternative Names
-        names = X509_get_ext_d2i(x509, NID_subject_alt_name, NULL, NULL);
+        names = (STACK_OF(GENERAL_NAME) *) X509_get_ext_d2i(x509, NID_subject_alt_name, NULL, NULL);
         for (i = 0; i < sk_GENERAL_NAME_num(names); i++) {
             name = sk_GENERAL_NAME_value(names, i);
             if (name->type == GEN_DNS) {
@@ -1792,7 +1793,7 @@ void init_globals() {
     }
 #endif
     /* child_pids */
-    if ((child_pids = calloc(CONFIG->NCORES, sizeof(pid_t))) == NULL)
+    if ((child_pids = (pid_t *)calloc(CONFIG->NCORES, sizeof(pid_t))) == NULL)
         fail("calloc");
 
     if (CONFIG->SYSLOG)
