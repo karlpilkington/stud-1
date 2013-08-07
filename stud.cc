@@ -1549,6 +1549,15 @@ static void handle_accept(struct ev_loop *loop, ev_io *w, int revents) {
 
     //proxystate *ps = (proxystate *)malloc(sizeof(proxystate));
     proxystate *ps = SPool.Get();
+    if(unlikely(ps==NULL)){
+        fprintf(stderr,"Ran out of memory in the memory pool -- recompile with a larger memory pool");
+        close(client);
+        close(back);
+        SSL_set_shutdown(ps->ssl, SSL_SENT_SHUTDOWN);
+        SSL_free(ps->ssl);
+        ERR_clear_error();
+        return;
+    }
 
     ps->fd_up = client;
     ps->fd_down = back;
