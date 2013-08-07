@@ -179,6 +179,7 @@ typedef struct proxystate {
     struct sockaddr_storage remote_ip;  /* Remote ip returned from `accept` */
     ringbuffer_t ring_ssl2clear;
     ringbuffer_t ring_clear2ssl;
+    char buf[RINGBUFFER_SIZE*2];
 } proxystate;
 
 SimpleMemoryPool <proxystate,8192> SPool;
@@ -1555,8 +1556,8 @@ static void handle_accept(struct ev_loop *loop, ev_io *w, int revents) {
     ps->handshaked = 0;
     ps->renegotiation = 0;
     ps->remote_ip = addr;
-    ringbuffer_init(&ps->ring_clear2ssl);
-    ringbuffer_init(&ps->ring_ssl2clear);
+    ringbuffer_init(&ps->ring_ssl2clear,ps->buf);
+    ringbuffer_init(&ps->ring_clear2ssl,ps->buf+RINGBUFFER_SIZE);
 
     /* set up events */
     ev_io_init(&ps->ev_r_ssl, ssl_read, client, EV_READ);

@@ -27,11 +27,12 @@
 
 typedef struct {
   int head,tail;
-  char buf[RINGBUFFER_SIZE];
+  char *buf;
 }ringbuffer_t;
 
-static inline void ringbuffer_init(ringbuffer_t * __restrict r){
+static inline void ringbuffer_init(ringbuffer_t * __restrict r, char *buf){
     r->head=r->tail=0;
+    r->buf=buf;
 }
 static inline bool ringbuffer_is_empty(const ringbuffer_t *r){
   return r->head==r->tail;
