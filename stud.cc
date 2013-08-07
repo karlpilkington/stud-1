@@ -50,11 +50,12 @@
 #include <stdarg.h>
 #include <stdbool.h>
 
-char *inet_ntoa_r(const struct in_addr in, char *buffer, socklen_t buflen);
+//char *inet_ntoa_r(const struct in_addr in, char *buffer, socklen_t buflen);
 #ifdef __sun
 #include <sys/filio.h>
 #include <sys/signal.h>
-char *inet_ntoa_r(const struct in_addr in, char *buffer, socklen_t buflen);
+//char *inet_ntoa_r(const struct in_addr in, char *buffer, socklen_t buflen);
+//char *inet_ntoa_r(const struct in_addr in, char *buffer, int buflen);
 #endif
 
 #include <ctype.h>
@@ -1178,7 +1179,8 @@ static void end_handshake(proxystate *ps) {
         char host[INET6_ADDRSTRLEN];
 
         if (addr->sin_family == AF_INET) {
-            inet_ntoa_r(addr->sin_addr, host, sizeof(host));
+            //inet_ntoa_r(addr->sin_addr, host, sizeof(host));
+            inet_ntop(AF_INET, &(addr->sin_addr), host, sizeof(host));
         }
         else if (addr->sin_family == AF_INET6 ) {
           struct sockaddr_in6* addr6 = (struct sockaddr_in6*) addr;
@@ -1675,8 +1677,8 @@ static void handle_clear_accept(struct ev_loop *loop, ev_io *w, int revents) {
     ps->handshaked = 0;
     ps->renegotiation = 0;
     ps->remote_ip = addr;
-    ringbuffer_init(&ps->ring_clear2ssl);
-    ringbuffer_init(&ps->ring_ssl2clear);
+    ringbuffer_init(&ps->ring_clear2ssl,ps->buf+RINGBUFFER_SIZE);
+    ringbuffer_init(&ps->ring_ssl2clear,ps->buf);
 
     /* set up events */
     ev_io_init(&ps->ev_r_clear, clear_read, client, EV_READ);
