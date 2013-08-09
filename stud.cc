@@ -183,7 +183,10 @@ typedef struct proxystate {
     char buf[RINGBUFFER_SIZE*2];
 } proxystate;
 
-SimpleMemoryPool <proxystate,8192> SPool;
+SimpleMemoryPool <proxystate,8192,sizeof(proxystate)> SPool;
+SimpleMemoryPool <char,8192,24*1024> SPool24K;
+char *SPool24K_Start;
+size_t SPool24K_Size;
 
 #define LOG(...)                                            \
     do {                                                    \
@@ -704,6 +707,36 @@ SSL_CTX *make_ctx(const char *pemfile) {
     return ctx;
 }
 
+
+static void *stud_malloc(size_t size){
+    const uint64_t MAX_SIZE=20*1024;
+    // check if the allocation is between 20 & 24 KB 
+    if(((uint64_t)size - MAX_SIZE) <=4096){
+        return SPool24K.Get();
+    }
+    return malloc(size);
+}
+
+static void *stud_realloc(void *ptr, size_t size){
+    uint64_t p=(uint64_t)ptr;
+    if(unlikely((p-(uint64_t)SPool24K_Start) < SPool24K_Size)){
+        if(((uint64_t)size -1UL) <= (24*1024)){
+            return ptr;
+        }
+        SPool24K.Release((char *)ptr);
+        return stud_malloc(size);
+    }
+    return realloc(ptr,size);
+}
+
+static void stud_free(void *ptr){
+    if(unlikely(((uint64_t)ptr-(uint64_t)SPool24K_Start) <= SPool24K_Size)){
+        SPool24K.Release((char *)ptr);
+    }else{
+        free(ptr);
+    }
+}
+
 /* Init library and load specified certificate.
  * Establishes a SSL_ctx, to act as a template for
  * each connection */
@@ -798,6 +831,7 @@ void init_openssl() {
             ENGINE_free(e);
         }
     }
+    CRYPTO_set_mem_functions(stud_malloc,stud_realloc,stud_free);
 }
 
 static void prepare_proxy_line(struct sockaddr* ai_addr) {
@@ -1810,6 +1844,8 @@ void init_globals() {
 
     if (CONFIG->SYSLOG)
         openlog("stud", LOG_CONS | LOG_PID | LOG_NDELAY, CONFIG->SYSLOG_FACILITY);
+
+    SPool24K_Start=SPool24K.Info(SPool24K_Size);
 }
 
 /* Forks COUNT children starting with START_INDEX.
