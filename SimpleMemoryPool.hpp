@@ -27,7 +27,7 @@
 #include <stdlib.h>
 #include <stdio.h>
 
-template <typename ELEMENT, size_t MAX_ELEMENTS, bool PAGE_ROUNDED=true, size_t PAGE_SIZE=4096, typename COUNT_TYPE =uint16_t>
+template <typename ELEMENT, size_t MAX_ELEMENTS, size_t ELEMENT_SIZE=sizeof(ELEMENT), bool PAGE_ROUNDED=true, size_t PAGE_SIZE=4096, typename COUNT_TYPE =uint16_t>
 class SimpleMemoryPool{
     char * Start;
     COUNT_TYPE Stack[MAX_ELEMENTS];
@@ -35,9 +35,9 @@ class SimpleMemoryPool{
     size_t ElementSize;
 
     void Init(){
-       ElementSize=sizeof(ELEMENT);
+       ElementSize=ELEMENT_SIZE;
        if(PAGE_ROUNDED){
-           ElementSize=(sizeof(ELEMENT)+(PAGE_SIZE-1))& (~(PAGE_SIZE-1));
+           ElementSize=(ELEMENT_SIZE+(PAGE_SIZE-1))& (~(PAGE_SIZE-1));
        }
        size_t size=ElementSize*MAX_ELEMENTS;
        Start=(char *)mmap(NULL,size,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANON,-1,0);
@@ -71,6 +71,10 @@ class SimpleMemoryPool{
     }
     void Test(){
 
+    }
+    char *Info(size_t &size){
+        size=ElementSize*MAX_ELEMENTS;
+        return Start;
     }
 };
 
