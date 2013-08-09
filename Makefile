@@ -10,7 +10,7 @@ MANDIR  = $(PREFIX)/share/man
 LDFLAGS=-g -lm -lsocket -lnsl -m64 -L/opt/local/lib -Wl,-R/opt/local/lib
 CC=gcc
 CXX=g++
-CPPFLAGS=-O2 -m64 -Ideps/libev -Ideps/openssl/include -g -march=native -DNDEBUG -std=c++0x -fpermissive
+CPPFLAGS=-O2 -m64 -Ideps/libev -Ideps/openssl/include -g -march=native -DNDEBUG -std=c++0x -fpermissive -Wall
 OBJS    =stud_provider.o stud.o configuration.o \
 				 deps/libev/.libs/libev.a deps/openssl/libssl.a deps/openssl/libcrypto.a
 
