@@ -710,11 +710,12 @@ SSL_CTX *make_ctx(const char *pemfile) {
 
 static void *stud_malloc(size_t size){
     const uint64_t MAX_SIZE=20*1024;
+    void *ptr=NULL;
     // check if the allocation is between 20 & 24 KB 
     if(((uint64_t)size - MAX_SIZE) <=4096){
-        return SPool24K.Get();
+        ptr=SPool24K.Get();
     }
-    return malloc(size);
+    return (ptr!=NULL)?ptr:malloc(size);
 }
 
 static void *stud_realloc(void *ptr, size_t size){
