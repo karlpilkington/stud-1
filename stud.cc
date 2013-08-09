@@ -741,6 +741,7 @@ static void stud_free(void *ptr){
  * Establishes a SSL_ctx, to act as a template for
  * each connection */
 void init_openssl() {
+    CRYPTO_set_mem_functions(stud_malloc,stud_realloc,stud_free);
     SSL_library_init();
     SSL_load_error_strings();
 
@@ -831,7 +832,6 @@ void init_openssl() {
             ENGINE_free(e);
         }
     }
-    CRYPTO_set_mem_functions(stud_malloc,stud_realloc,stud_free);
 }
 
 static void prepare_proxy_line(struct sockaddr* ai_addr) {
