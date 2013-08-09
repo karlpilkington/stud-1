@@ -1015,14 +1015,14 @@ static void clear_read(struct ev_loop *loop, ev_io *w, int revents) {
     do{
         int prev_len=ringbuffer_available_to_read(ring);
         // get previously buffered data 
-        if(unlikely(prev_len >= sizeof(buf))){
+        if(unlikely(prev_len >= (int)sizeof(buf))){
             // the buffer is full
             ev_io_stop(loop, &ps->ev_r_clear);
             break;
         }
         int offset=prev_len,ret;
         process_more_data=false;
-        while(offset < sizeof(buf)){
+        while(offset < (int)sizeof(buf)){
             ret = read(fd, buf+offset, sizeof(buf)-offset);
             if(ret <=0){
                 break;
@@ -1409,7 +1409,7 @@ static void ssl_read(struct ev_loop *loop, ev_io *w, int revents) {
     // get previously buffered data 
     int offset=prev_len,ret=0;
     //fprintf(stdout,"prev_len:%d\n",prev_len);
-    while(offset < sizeof(buf)){
+    while(offset < (int)sizeof(buf)){
         ret = SSL_read(ps->ssl, buf+offset, sizeof(buf)-offset);
         //write(STDOUT_FILENO,buf+offset,ret);
         if(ret <=0){
