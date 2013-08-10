@@ -9,8 +9,8 @@ MANDIR  = $(PREFIX)/share/man
 
 LDFLAGS=-g -lm -lsocket -lnsl -m64 -L/opt/local/lib -Wl,-R/opt/local/lib
 CC=gcc
-CFLAGS=-O2 -m64 -Ideps/libev -Ideps/openssl/include -g
-OBJS    =stud_provider.o stud.o ringbuffer.o configuration.o \
+CFLAGS=-O2 -m64 -Ideps/libev -Ideps/openssl/include -Ideps/ringbuffer -g
+OBJS    =stud_provider.o stud.o deps/ringbuffer/ringbuffer.o configuration.o \
 				 deps/libev/.libs/libev.a deps/openssl/libssl.a deps/openssl/libcrypto.a
 
 all: realall
@@ -62,6 +62,10 @@ deps/openssl/libcrypto.a:
 	cd deps/openssl && ./Configure no-idea no-mdc2 no-rc5 enable-tlsext solaris64-x86_64-gcc
 	-$(MAKE) $(MAKEFLAGS) -C deps/openssl depend
 	-$(MAKE) $(MAKEFLAGS) -C deps/openssl
+
+stud.o: deps/ringbuffer/ringbuffer.h
+
+deps/ringbuffer/ringbuffer.o: deps/ringbuffer/ringbuffer.c deps/ringbuffer/ringbuffer.h
 
 install: $(ALL)
 	install -d $(DESTDIR)$(BINDIR)

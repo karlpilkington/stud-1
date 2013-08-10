@@ -142,9 +142,6 @@ static ctx_list *sni_ctxs;
  * All state associated with one proxied connection
  */
 typedef struct proxystate {
-    ringbuffer ring_ssl2clear;          /* Pushing bytes from secure to clear stream */
-    ringbuffer ring_clear2ssl;          /* Pushing bytes from clear to secure stream */
-
     ev_io ev_r_ssl;                     /* Secure stream write event */
     ev_io ev_w_ssl;                     /* Secure stream read event */
 
@@ -169,6 +166,9 @@ typedef struct proxystate {
     SSL *ssl;                           /* OpenSSL SSL state */
 
     struct sockaddr_storage remote_ip;  /* Remote ip returned from `accept` */
+
+    ringbuffer ring_ssl2clear;          /* Pushing bytes from secure to clear stream */
+    ringbuffer ring_clear2ssl;          /* Pushing bytes from clear to secure stream */
 } proxystate;
 
 #define LOG(...)                                            \
@@ -910,6 +910,9 @@ static void shutdown_proxy(proxystate *ps, SHUTDOWN_REQUESTOR req) {
         ps->fd_down = -1;
         ps->ssl = NULL;
 
+        ringbuffer_destroy(&ps->ring_clear2ssl);
+        ringbuffer_destroy(&ps->ring_ssl2clear);
+
         free(ps);
     }
     else {
@@ -954,18 +957,21 @@ static int start_connect(proxystate *ps) {
  * enabled for the upstream socket */
 static void clear_read(struct ev_loop *loop, ev_io *w, int revents) {
     (void) revents;
-    int t;
+    ssize_t t;
     proxystate *ps = (proxystate *)w->data;
     if (ps->want_shutdown) {
         ev_io_stop(loop, &ps->ev_r_clear);
         return;
     }
     int fd = w->fd;
-    char * buf = ringbuffer_write_ptr(&ps->ring_clear2ssl);
-    t = recv(fd, buf, RING_DATA_LEN, 0);
+    ssize_t len = 0;
+    char* buf = ringbuffer_write_ptr(&ps->ring_clear2ssl, &len);
+    t = recv(fd, buf, len, 0);
 
     if (t > 0) {
-        ringbuffer_write_append(&ps->ring_clear2ssl, t);
+        if (ringbuffer_write_append(&ps->ring_clear2ssl, t))
+            return shutdown_proxy(ps, SHUTDOWN_CLEAR);
+
         if (ringbuffer_is_full(&ps->ring_clear2ssl))
             ev_io_stop(loop, &ps->ev_r_clear);
         if (ps->handshaked)
@@ -984,10 +990,10 @@ static void clear_read(struct ev_loop *loop, ev_io *w, int revents) {
  * out of the downstream buffer and onto the backend socket */
 static void clear_write(struct ev_loop *loop, ev_io *w, int revents) {
     (void) revents;
-    int t;
+    ssize_t t;
     proxystate *ps = (proxystate *)w->data;
     int fd = w->fd;
-    int sz;
+    ssize_t sz;
 
     assert(!ringbuffer_is_empty(&ps->ring_ssl2clear));
 
@@ -1072,6 +1078,7 @@ static void start_handshake(proxystate *ps, int err) {
 /* After OpenSSL is done with a handshake, re-wire standard read/write handlers
  * for data transmission */
 static void end_handshake(proxystate *ps) {
+    int r;
     char tcp6_address_string[INET6_ADDRSTRLEN];
     size_t written = 0;
     ev_io_stop(loop, &ps->ev_r_handshake);
@@ -1123,13 +1130,14 @@ static void end_handshake(proxystate *ps) {
     /* Check if clear side is connected */
     if (!ps->clear_connected) {
         if (CONFIG->WRITE_PROXY_LINE) {
-            char *ring_pnt = ringbuffer_write_ptr(&ps->ring_ssl2clear);
+            ssize_t len = 0;
+            char *ring_pnt = ringbuffer_write_ptr(&ps->ring_ssl2clear, &len);
             assert(ps->remote_ip.ss_family == AF_INET ||
                    ps->remote_ip.ss_family == AF_INET6);
             if(ps->remote_ip.ss_family == AF_INET) {
                struct sockaddr_in* addr = (struct sockaddr_in*)&ps->remote_ip;
                written = snprintf(ring_pnt,
-                                  RING_DATA_LEN,
+                                  len,
                                   tcp_proxy_line,
                                   "TCP4",
                                   inet_ntoa(addr->sin_addr),
@@ -1139,28 +1147,34 @@ static void end_handshake(proxystate *ps) {
                         struct sockaddr_in6* addr = (struct sockaddr_in6*)&ps->remote_ip;
                         inet_ntop(AF_INET6,&(addr->sin6_addr),tcp6_address_string,INET6_ADDRSTRLEN);
                         written = snprintf(ring_pnt,
-                                  RING_DATA_LEN,
+                                  len,
                                   tcp_proxy_line,
                                   "TCP6",
                                   tcp6_address_string,
                                   ntohs(addr->sin6_port));
             }
-            ringbuffer_write_append(&ps->ring_ssl2clear, written);
+            r = ringbuffer_write_append(&ps->ring_clear2ssl, written);
+            assert(r == 0);
         }
         else if (CONFIG->WRITE_IP_OCTET) {
-            char *ring_pnt = ringbuffer_write_ptr(&ps->ring_ssl2clear);
+            ssize_t len = 0;
+            char *ring_pnt = ringbuffer_write_ptr(&ps->ring_ssl2clear, &len);
             assert(ps->remote_ip.ss_family == AF_INET ||
                    ps->remote_ip.ss_family == AF_INET6);
             *ring_pnt++ = (unsigned char) ps->remote_ip.ss_family;
             if (ps->remote_ip.ss_family == AF_INET6) {
+                assert(len <= 17);
                 memcpy(ring_pnt, &((struct sockaddr_in6 *) &ps->remote_ip)
                        ->sin6_addr.s6_addr, 16U);
-                ringbuffer_write_append(&ps->ring_ssl2clear, 1U + 16U);
+                r = ringbuffer_write_append(&ps->ring_ssl2clear, 1U + 16U);
+                assert(r == 0);
             }
             else {
+                assert(len <= 5);
                 memcpy(ring_pnt, &((struct sockaddr_in *) &ps->remote_ip)
                        ->sin_addr.s_addr, 4U);
-                ringbuffer_write_append(&ps->ring_ssl2clear, 1U + 4U);
+                r = ringbuffer_write_append(&ps->ring_ssl2clear, 1U + 4U);
+                assert(r == 0);
             }
         }
         /* start connect now */
@@ -1209,9 +1223,12 @@ static void client_proxy_proxy(struct ev_loop *loop, ev_io *w, int revents) {
             return;
         }
 
-        char *ring = ringbuffer_write_ptr(&ps->ring_ssl2clear);
-        memcpy(ring, tcp_proxy_line, proxy - tcp_proxy_line);
-        ringbuffer_write_append(&ps->ring_ssl2clear, proxy - tcp_proxy_line);
+        ssize_t len = proxy - tcp_proxy_line;
+        char *ring = ringbuffer_write_ptr(&ps->ring_ssl2clear, &len);
+        assert(len == (proxy - tcp_proxy_line));
+        memcpy(ring, tcp_proxy_line, len);
+        t = ringbuffer_write_append(&ps->ring_ssl2clear, len);
+        assert(t == 0);
 
         // Finished reading the PROXY header
         if (*(proxy - 1) == '\n') {
@@ -1284,8 +1301,9 @@ static void ssl_read(struct ev_loop *loop, ev_io *w, int revents) {
         ev_io_stop(loop, &ps->ev_r_ssl);
         return;
     }
-    char * buf = ringbuffer_write_ptr(&ps->ring_ssl2clear);
-    t = SSL_read(ps->ssl, buf, RING_DATA_LEN);
+    ssize_t len = 0;
+    char * buf = ringbuffer_write_ptr(&ps->ring_ssl2clear, &len);
+    t = SSL_read(ps->ssl, buf, len);
 
     /* Fix CVE-2009-3555. Disable reneg if started by client. */
     if (ps->renegotiation) {
@@ -1294,7 +1312,8 @@ static void ssl_read(struct ev_loop *loop, ev_io *w, int revents) {
     }
 
     if (t > 0) {
-        ringbuffer_write_append(&ps->ring_ssl2clear, t);
+        if (ringbuffer_write_append(&ps->ring_ssl2clear, t))
+            return shutdown_proxy(ps, SHUTDOWN_SSL);
         if (ringbuffer_is_full(&ps->ring_ssl2clear))
             ev_io_stop(loop, &ps->ev_r_ssl);
         if (ps->clear_connected)
@@ -1316,7 +1335,7 @@ static void ssl_read(struct ev_loop *loop, ev_io *w, int revents) {
 static void ssl_write(struct ev_loop *loop, ev_io *w, int revents) {
     (void) revents;
     int t;
-    int sz;
+    ssize_t sz;
     proxystate *ps = (proxystate *)w->data;
     assert(!ringbuffer_is_empty(&ps->ring_clear2ssl));
     char * next = ringbuffer_read_next(&ps->ring_clear2ssl, &sz);
@@ -1335,7 +1354,7 @@ static void ssl_write(struct ev_loop *loop, ev_io *w, int revents) {
             }
         }
         else {
-            ringbuffer_read_skip(&ps->ring_clear2ssl, t);
+            ringbuffer_read_skip(&ps->ring_clear2ssl, (ssize_t) t);
         }
     }
     else {
