@@ -65,7 +65,7 @@ class SimpleMemoryPool{
         if(likely(Top <= MAX_ELEMENTS)){
             Stack[Top++]=((char *)ptr - Start)/ElementSize;
             if(PAGE_ROUNDED){
-                  posix_madvise(ptr,ElementSize,POSIX_MADV_DONTNEED);
+                  madvise(ptr,ElementSize,MADV_FREE);
             }
         }
     }
