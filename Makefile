@@ -14,6 +14,7 @@ CPPFLAGS=-O2 -m64 -Ideps/libev -Ideps/openssl/include -g -march=native -DNDEBUG 
 OBJS    =stud_provider.o stud.o configuration.o \
 				 deps/libev/.libs/libev.a deps/openssl/libssl.a deps/openssl/libcrypto.a
 
+DTRACE=/usr/sbin/dtrace
 all: realall
 
 # Shared cache feature
@@ -37,10 +38,10 @@ CPPFLAGS += -DNO_CONFIG_FILE
 endif
 
 stud_provider.h: stud_provider.d
-	dtrace -64 -h -xnolibs -s $^ -o $@
+	$(DTRACE) -64 -h -xnolibs -s $^ -o $@
 
 stud_provider.o: stud.o stud_provider.d
-	dtrace -64 -G -xnolibs -s stud_provider.d -o $@ stud.o
+	$(DTRACE) -64 -G -xnolibs -s stud_provider.d -o $@ stud.o
 
 ALL += stud_provider.h
 
