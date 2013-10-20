@@ -26,6 +26,9 @@
 #include <sys/mman.h>
 #include <stdlib.h>
 #include <stdio.h>
+extern "C" {
+int madvise(caddr_t addr, size_t len, int advice);
+}
 
 template <typename ELEMENT, size_t MAX_ELEMENTS, size_t ELEMENT_SIZE=sizeof(ELEMENT), bool PAGE_ROUNDED=true, size_t PAGE_SIZE=4096, typename COUNT_TYPE =uint16_t>
 class SimpleMemoryPool{
@@ -65,7 +68,7 @@ class SimpleMemoryPool{
         if(likely(Top <= MAX_ELEMENTS)){
             Stack[Top++]=((char *)ptr - Start)/ElementSize;
             if(PAGE_ROUNDED){
-                  madvise(ptr,ElementSize,MADV_FREE);
+                  madvise((char *)ptr,ElementSize,MADV_FREE);
             }
         }
     }
