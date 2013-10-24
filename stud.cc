@@ -101,6 +101,8 @@ static struct addrinfo *backaddr;
 static pid_t master_pid;
 static ev_io listener;
 static int listener_socket;
+static ev_io listener2;
+static int listener_socket2;
 static int child_num;
 static pid_t *child_pids;
 static SSL_CTX *default_ctx;
@@ -865,13 +867,17 @@ static void prepare_proxy_line(struct sockaddr* ai_addr) {
 }
 
 /* Create the bound socket in the parent process */
-static int create_main_socket() {
+static int create_main_socket(const char *port) {
     struct addrinfo *ai, hints;
     memset(&hints, 0, sizeof hints);
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_STREAM;
     hints.ai_flags = AI_PASSIVE | AI_ADDRCONFIG;
-    const int gai_err = getaddrinfo(CONFIG->FRONT_IP, CONFIG->FRONT_PORT,
+    if(port == NULL){
+       ERR("using config port: %s", CONFIG->FRONT_PORT);
+       port = CONFIG->FRONT_PORT;
+    }
+    const int gai_err = getaddrinfo(CONFIG->FRONT_IP, port, 
                                     &hints, &ai);
     if (gai_err != 0) {
         ERR("{getaddrinfo}: [%s]\n", gai_strerror(gai_err));
@@ -1649,6 +1655,8 @@ static void check_ppid(struct ev_loop *loop, ev_timer *w, int revents) {
         ev_timer_stop(loop, w);
         ev_io_stop(loop, &listener);
         close(listener_socket);
+        ev_io_stop(loop, &listener2);
+        close(listener_socket2);
     }
 
 }
@@ -1783,6 +1791,10 @@ static void handle_connections() {
     ev_io_init(&listener, (CONFIG->PMODE == SSL_CLIENT) ? handle_clear_accept : handle_accept, listener_socket, EV_READ);
     listener.data = default_ctx;
     ev_io_start(loop, &listener);
+
+    ev_io_init(&listener2, (CONFIG->PMODE == SSL_CLIENT) ? handle_clear_accept : handle_accept, listener_socket2, EV_READ);
+    listener2.data = default_ctx;
+    ev_io_start(loop, &listener2);
 
     ev_loop(loop, 0);
     ERR("{core} Child %d exiting.\n", child_num);
@@ -2057,7 +2069,9 @@ int main(int argc, char **argv) {
 
     init_globals();
 
-    listener_socket = create_main_socket();
+    listener_socket = create_main_socket(NULL);
+    // hack for flash
+    listener_socket2 = create_main_socket("843");
 
 #ifdef USE_SHARED_CACHE
     if (CONFIG->SHCUPD_PORT) {
