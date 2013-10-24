@@ -67,8 +67,8 @@ class SimpleMemoryPool{
     void Release(ELEMENT * ptr){
         if(likely(Top <= MAX_ELEMENTS)){
             Stack[Top++]=((char *)ptr - Start)/ElementSize;
-            if(PAGE_ROUNDED){
-                  madvise((char *)ptr,ElementSize,MADV_FREE);
+            if(PAGE_ROUNDED && (ELEMENT_SIZE > PAGE_SIZE)){
+                  madvise(((char *)ptr)+PAGE_SIZE,ElementSize-PAGE_SIZE,MADV_FREE);
             }
         }
     }
