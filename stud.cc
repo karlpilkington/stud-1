@@ -1024,7 +1024,8 @@ static void clear_read(struct ev_loop *loop, ev_io *w, int revents) {
         int offset=prev_len,ret;
         process_more_data=false;
         while(offset < (int)sizeof(buf)){
-            ret = read(fd, buf+offset, sizeof(buf)-offset);
+            //ret = read(fd, buf+offset, sizeof(buf)-offset);
+            ret = recv(fd, buf+offset, sizeof(buf)-offset, MSG_DONTWAIT);
             if(ret <=0){
                 break;
             }
