@@ -85,9 +85,13 @@ class SimpleMemoryPool{
     }
     void AdvisePageFrees()
     {
+        if(unlikely(Top <= FreeTheshold)){
+            return;
+        }
         COUNT_TYPE end = Top - FreeTheshold/2;
         char *ptr;
-        for(COUNT_TYPE i=Top - 1 - (FreeTheshold/2);  i < end; i++){
+        COUNT_TYPE i=Top - 1 - FreeTheshold;
+        for(; i < end; i++){
             ptr = Start + (Stack[i] * ElementSize);
             madvise(ptr,ElementSize,MADV_FREE);
         }
