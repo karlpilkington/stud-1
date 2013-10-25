@@ -48,7 +48,9 @@ ALL += stud_provider.h
 ALL += stud
 realall: $(ALL)
 
-stud: $(OBJS)
+stud.o: stud.cc SimpleMemoryPool.hpp
+
+stud: $(OBJS) SimpleMemoryPool.hpp
 	$(CXX)  $(CPPFLAGS) -o $@ $^ $(LDFLAGS)
 
 deps/libev/.libs/libev.a: deps/libev/Makefile
