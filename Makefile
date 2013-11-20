@@ -6,13 +6,14 @@ DESTDIR =
 PREFIX  = /usr/local
 BINDIR  = $(PREFIX)/bin
 MANDIR  = $(PREFIX)/share/man
+PLATFORM = $(shell sh -c 'uname -s | tr "[A-Z]" "[a-z]"')
 
-LDFLAGS=-g -lm -lsocket -lnsl -m64 -L/opt/local/lib -Wl,-R/opt/local/lib
-CC=gcc
-CXX=g++
-CPPFLAGS=-O2 -m64 -Ideps/libev -Ideps/openssl/include -g -march=native -DNDEBUG -std=c++0x -fpermissive -Wall
-OBJS    =stud_provider.o stud.o configuration.o \
-				 deps/libev/.libs/libev.a deps/openssl/libssl.a deps/openssl/libcrypto.a
+LDFLAGS = -g -lm -m64
+CC = gcc
+CXX = g++
+CPPFLAGS = -O2 -m64 -Ideps/libev -g -march=native -DNDEBUG -Wall
+CXXFLAGS = -std=c++0x -fpermissive 
+OBJS = stud.o configuration.o deps/libev/.libs/libev.a
 
 DTRACE=/usr/sbin/dtrace
 all: realall
@@ -37,6 +38,19 @@ ifneq ($(NO_CONFIG_FILE),)
 CPPFLAGS += -DNO_CONFIG_FILE
 endif
 
+ifeq ($(SHARED_OPENSSL),1)
+LDFLAGS += -lssl -lcrypto
+else
+CPPFLAGS += -Ideps/openssl/include
+OBJS += deps/openssl/libssl.a deps/openssl/libcrypto.a
+endif
+
+ifeq ($(PLATFORM),sunos)
+LDFLAGS += -lsocket -L/opt/local/lib -Wl,-R/opt/local/lib -lnsl
+CPPFLAGS += -DSTUD_DTRACE=1
+
+OBJS += stud_provider.o
+
 stud_provider.h: stud_provider.d
 	$(DTRACE) -64 -h -xnolibs -s $^ -o $@
 
@@ -44,6 +58,9 @@ stud_provider.o: stud.o stud_provider.d
 	$(DTRACE) -64 -G -xnolibs -s stud_provider.d -o $@ stud.o
 
 ALL += stud_provider.h
+else
+LDFLAGS += -ldl
+endif
 
 ALL += stud
 realall: $(ALL)
@@ -51,7 +68,7 @@ realall: $(ALL)
 stud.o: stud.cc SimpleMemoryPool.hpp
 
 stud: $(OBJS) SimpleMemoryPool.hpp
-	$(CXX)  $(CPPFLAGS) -o $@ $^ $(LDFLAGS)
+	$(CXX)  $(CPPFLAGS) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
 
 deps/libev/.libs/libev.a: deps/libev/Makefile
 	$(MAKE) $(MAKEFLAGS) -C deps/libev
@@ -62,8 +79,16 @@ deps/libev/Makefile:
 # Forward dependency
 deps/openssl/libssl.a: deps/openssl/libcrypto.a
 
+ifeq ($(PLATFORM),darwin)
+OPENSSL_PLATFORM = darwin64-x86_64-cc
+else ifeq ($(PLATFORM),sunos)
+OPENSSL_PLATFORM = solaris64-x86_64-gcc
+else
+OPENSSL_PLATFORM = linux-x86_64
+endif
+
 deps/openssl/libcrypto.a:
-	cd deps/openssl && ./Configure no-idea no-mdc2 no-rc5 enable-tlsext solaris64-x86_64-gcc
+	cd deps/openssl && ./Configure no-idea no-mdc2 no-rc5 enable-tlsext $(OPENSSL_PLATFORM)
 	-$(MAKE) $(MAKEFLAGS) -C deps/openssl depend
 	-$(MAKE) $(MAKEFLAGS) -C deps/openssl
 

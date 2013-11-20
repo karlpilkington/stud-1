@@ -69,7 +69,14 @@ char *inet_ntoa_r(const struct in_addr in, char *buffer, socklen_t buflen);
 #include <openssl/asn1.h>
 #include <ev.h>
 
-#include "stud_provider.h"
+#ifdef STUD_DTRACE
+# include "stud_provider.h"
+#else  /* STUD_DTRACE */
+# define STUD_SSL_SESSION_REUSE_ENABLED(a) 0
+# define STUD_SSL_SESSION_REUSE(a, b, c) do { } while (0)
+# define STUD_SSL_SESSION_NEW(a, b, c) do { } while (0)
+#endif  /* STUD_DTRACE */
+
 #include "ringbuffer.h"
 #include "shctx.h"
 #include "configuration.h"
