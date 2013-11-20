@@ -71,7 +71,14 @@
 #include <openssl/asn1.h>
 #include <ev.h>
 
-#include "stud_provider.h"
+#ifdef STUD_DTRACE
+# include "stud_provider.h"
+#else  /* STUD_DTRACE */
+# define STUD_SSL_SESSION_REUSE_ENABLED(a) 0
+# define STUD_SSL_SESSION_REUSE(a, b, c) do { } while (0)
+# define STUD_SSL_SESSION_NEW(a, b, c) do { } while (0)
+#endif  /* STUD_DTRACE */
+
 #include "ringbuffer.h"
 #include "shctx.h"
 #include "configuration.h"
@@ -232,13 +239,6 @@ static void settcpkeepalive(int fd) {
     if(setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &optval, optlen) < 0) {
         ERR("Error activating SO_KEEPALIVE on client socket: %s", strerror(errno));
     }
-/*  #ifdef TCP_KEEPIDLE
-    optval = CONFIG->TCP_KEEPALIVE_TIME;
-    optlen = sizeof(optval);
-    if(setsockopt(fd, SOL_TCP, TCP_KEEPALIVE, &optval, optlen) < 0) {
-        ERR("Error setting TCP_KEEPALIVE on client socket: %s", strerror(errno));
-    }
-#endif  */
 }
 
 static void fail(const char* s) {
