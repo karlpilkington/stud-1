@@ -27,7 +27,11 @@
 #include <stdlib.h>
 #include <stdio.h>
 extern "C" {
+#ifdef __sun
 int madvise(caddr_t addr, size_t len, int advice);
+#else
+int madvise(void *addr, size_t len, int advice);
+#endif
 }
 
 template <typename ELEMENT, size_t MAX_ELEMENTS, size_t ELEMENT_SIZE=sizeof(ELEMENT), bool PAGE_ROUNDED=true, size_t PAGE_SIZE=4096, typename COUNT_TYPE =uint16_t, size_t FREE_THRESHOLD=100>
