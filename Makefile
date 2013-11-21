@@ -9,15 +9,17 @@ MANDIR  = $(PREFIX)/share/man
 
 LDFLAGS=-g -lm -lsocket -lnsl -m64 -L/opt/local/lib -Wl,-R/opt/local/lib
 CC=gcc
-CFLAGS=-O2 -m64 -Ideps/libev -Ideps/openssl/include -g
-OBJS    =stud_provider.o stud.o ringbuffer.o configuration.o \
+CXX=g++
+CPPFLAGS=-O2 -m64 -Ideps/libev -Ideps/openssl/include -g -march=native -DNDEBUG -std=c++0x -fpermissive -Wall
+OBJS    =stud_provider.o stud.o configuration.o \
 				 deps/libev/.libs/libev.a deps/openssl/libssl.a deps/openssl/libcrypto.a
 
+DTRACE=/usr/sbin/dtrace
 all: realall
 
 # Shared cache feature
 ifneq ($(USE_SHARED_CACHE),)
-CFLAGS += -DUSE_SHARED_CACHE -DUSE_SYSCALL_FUTEX
+CPPFLAGS += -DUSE_SHARED_CACHE -DUSE_SYSCALL_FUTEX
 OBJS   += shctx.o ebtree/libebtree.a
 ALL    += ebtree
 
@@ -32,22 +34,24 @@ endif
 
 # No config file support?
 ifneq ($(NO_CONFIG_FILE),)
-CFLAGS += -DNO_CONFIG_FILE
+CPPFLAGS += -DNO_CONFIG_FILE
 endif
 
 stud_provider.h: stud_provider.d
-	dtrace -64 -h -xnolibs -s $^ -o $@
+	$(DTRACE) -64 -h -xnolibs -s $^ -o $@
 
 stud_provider.o: stud.o stud_provider.d
-	dtrace -64 -G -xnolibs -s stud_provider.d -o $@ stud.o
+	$(DTRACE) -64 -G -xnolibs -s stud_provider.d -o $@ stud.o
 
 ALL += stud_provider.h
 
 ALL += stud
 realall: $(ALL)
 
-stud: $(OBJS)
-	$(CC) -o $@ $^ $(LDFLAGS)
+stud.o: stud.cc SimpleMemoryPool.hpp
+
+stud: $(OBJS) SimpleMemoryPool.hpp
+	$(CXX)  $(CPPFLAGS) -o $@ $^ $(LDFLAGS)
 
 deps/libev/.libs/libev.a: deps/libev/Makefile
 	$(MAKE) $(MAKEFLAGS) -C deps/libev

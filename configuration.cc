@@ -19,7 +19,9 @@
 #include <sys/stat.h>
 #include <syslog.h>
 
+#ifdef __sun
 #include <netinet/ip_compat.h>
+#endif
 
 #include "configuration.h"
 #include "version.h"
@@ -81,7 +83,7 @@ static char tmp_buf[150];
 #include <openssl/ssl.h>
 SSL_CTX * init_openssl();
 
-static void config_error_set (char *fmt, ...) {
+static void config_error_set (const char *fmt, ...) {
   memset(error_buf, '\0', sizeof(error_buf));
   va_list args;
   va_start(args, fmt);
@@ -93,7 +95,7 @@ char * config_error_get (void) {
   return error_buf;
 }
 
-void config_die (char *fmt, ...) {
+void config_die (const char *fmt, ...) {
   va_list args;
   va_start(args, fmt);
   vfprintf(stderr, fmt, args);
@@ -105,7 +107,7 @@ void config_die (char *fmt, ...) {
 
 stud_config * config_new (void) {
   stud_config *r = NULL;
-  r = malloc(sizeof(stud_config));
+  r = (stud_config *)malloc(sizeof(stud_config));
   if (r == NULL) {
     config_error_set("Unable to allocate memory for configuration structure: %s", strerror(errno));
     return NULL;
@@ -535,7 +537,7 @@ int config_param_shcupd_peer (char *str, stud_config *cfg) {
 
 #endif /* USE_SHARED_CACHE */
 
-void config_param_validate (char *k, char *v, stud_config *cfg, char *file, int line) {
+void config_param_validate (const char *k, char *v, stud_config *cfg, char *file, int line) {
   int r = 1;
   struct stat st;
 
@@ -699,7 +701,7 @@ void config_param_validate (char *k, char *v, stud_config *cfg, char *file, int 
         config_error_set("Invalid x509 certificate PEM file '%s': Not a file.", v);
         r = 0;
       } else {
-        struct cert_files *cert = calloc(1, sizeof(*cert));
+        struct cert_files *cert = (struct cert_files *)calloc(1, sizeof(*cert));
         config_assign_str(&cert->CERT_FILE, v);
         cert->NEXT = cfg->CERT_FILES;
         cfg->CERT_FILES = cert;
@@ -768,11 +770,11 @@ int config_file_parse (char *file, stud_config *cfg) {
 }
 #endif /* NO_CONFIG_FILE */
 
-char * config_disp_str (char *str) {
+const char * config_disp_str (const char *str) {
   return (str == NULL) ? "" : str;
 }
 
-char * config_disp_bool (int v) {
+const char * config_disp_bool (int v) {
   return (v > 0) ? CFG_BOOL_ON : "off";
 }
 
@@ -796,7 +798,7 @@ char * config_disp_gid (gid_t gid) {
   return tmp_buf;
 }
 
-char * config_disp_hostport (char *host, char *port) {
+const char * config_disp_hostport (char *host, char *port) {
   memset(tmp_buf, '\0', sizeof(tmp_buf));
   if (host == NULL && port == NULL)
     return "";

@@ -1,67 +1,106 @@
-/**
-  * Copyright 2011 Bump Technologies, Inc. All rights reserved.
-  *
-  * Redistribution and use in source and binary forms, with or without modification, are
-  * permitted provided that the following conditions are met:
-  *
-  *    1. Redistributions of source code must retain the above copyright notice, this list of
-  *       conditions and the following disclaimer.
-  *
-  *    2. Redistributions in binary form must reproduce the above copyright notice, this list
-  *       of conditions and the following disclaimer in the documentation and/or other materials
-  *       provided with the distribution.
-  *
-  * THIS SOFTWARE IS PROVIDED BY BUMP TECHNOLOGIES, INC. ``AS IS'' AND ANY EXPRESS OR IMPLIED
-  * WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND
-  * FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL BUMP TECHNOLOGIES, INC. OR
-  * CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
-  * CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
-  * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON
-  * ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
-  * NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
-  * ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
-  *
-  * The views and conclusions contained in the software and documentation are those of the
-  * authors and should not be interpreted as representing official policies, either expressed
-  * or implied, of Bump Technologies, Inc.
-  *
-  **/
+/*
+ * =====================================================================================
+ *
+ *       Filename:  ringbuffer.h
+ *
+ *    Description:  Code to implement a simple ring buffer. This is meant to be fast, 
+ *                  but cannot be manipulated by multiple threads at the same time.
+ *
+ *        Version:  1.0
+ *        Created:  08/03/2013 16:44:47
+ *       Revision:  none
+ *       Compiler:  gcc
+ *
+ *         Author:  George Kola (), georgekola@gmail.com
+ *        Company:  
+ *
+ * =====================================================================================
+ */
 
-#ifndef RINGBUFFER_H
-#define RINGBUFFER_H
+#ifndef __RINGBUFFER_H
+#define __RINGBUFFER_H
 
-#include <stddef.h>
+#include <string.h>
+#define likely(x) __builtin_expect((x),1)
+#define unlikely(x) __builtin_expect((x),0)
+#define RINGBUFFER_SIZE (16*1024)
 
-/* Tweak these for potential memory/throughput tradeoffs */
-#define RING_SLOTS 3
-#define RING_DATA_LEN 1024 * 32
+typedef struct {
+  int head,tail;
+  char *buf;
+}ringbuffer_t;
 
-typedef struct bufent {
-    char data[RING_DATA_LEN];
-    char *ptr;
-    size_t left;
-    struct bufent *next;
-} bufent;
+static inline void ringbuffer_init(ringbuffer_t * __restrict r, char *buf){
+    r->head=r->tail=0;
+    r->buf=buf;
+}
+static inline bool ringbuffer_is_empty(const ringbuffer_t *r){
+  return r->head==r->tail;
+}
+static inline bool ringbuffer_is_full(const ringbuffer_t *r){
+  return ((r->tail+1)&(RINGBUFFER_SIZE-1)) == r->head;
+}
+static inline int ringbuffer_available_to_write(const ringbuffer_t *r){
+  return (r->head + RINGBUFFER_SIZE - r->tail -1)&(RINGBUFFER_SIZE-1);
+}
+static inline int ringbuffer_available_to_read(const ringbuffer_t *r){
+  return (r->tail + RINGBUFFER_SIZE - r->head)&(RINGBUFFER_SIZE-1);
+}
 
-typedef struct ringbuffer {
-    bufent slots[RING_SLOTS];
-    bufent *head; // reads from the head
-    bufent *tail; // writes to the tail
-    size_t used;
-} ringbuffer;
+int ringbuffer_append(ringbuffer_t *r, const char *buf, int len){
+  if(ringbuffer_is_full(r)){
+    return 0;
+  }
+  int max_bytes=ringbuffer_available_to_write(r);
+  len=(len > max_bytes)?max_bytes:len;
+  if(len > (RINGBUFFER_SIZE-r->tail)){
+    int first_chunk=RINGBUFFER_SIZE-r->tail;
+    memcpy(r->buf+r->tail,buf,first_chunk);
+    memcpy(r->buf,buf+first_chunk,len-first_chunk);
+    r->tail=(r->tail+len)&(RINGBUFFER_SIZE-1);
+  }else{
+    memcpy(r->buf+r->tail,buf,len);
+    r->tail+=len;
+  }
+  return len;
+}
 
-void ringbuffer_init(ringbuffer *rb);
+char *ringbuffer_get(ringbuffer_t * __restrict r, char * __restrict buf, int *output_len){
+    int len=ringbuffer_available_to_read(r);
+    *output_len=len;
+    if(len > RINGBUFFER_SIZE-r->head){
+        int first_chunk=RINGBUFFER_SIZE-r->head;
+        memcpy(buf,r->buf+r->head,first_chunk);
+        memcpy(buf+first_chunk,r->buf,len-first_chunk);
+        return buf;
+    }
+    return r->buf;
+}
 
-char * ringbuffer_read_next(ringbuffer *rb, int * length);
-void ringbuffer_read_skip(ringbuffer *rb, int length);
-void ringbuffer_read_pop(ringbuffer *rb);
+void ringbuffer_get2(ringbuffer_t * __restrict r, char * __restrict buf, int len){
+    if(len > RINGBUFFER_SIZE-r->head){
+        int first_chunk=RINGBUFFER_SIZE-r->head;
+        memcpy(buf,r->buf+r->head,first_chunk);
+        memcpy(buf+first_chunk,r->buf,len-first_chunk);
+    }else{
+        memcpy(buf,r->buf+r->head,len);
+    }
+}
 
-char * ringbuffer_write_ptr(ringbuffer *rb);
-void ringbuffer_write_append(ringbuffer *rb, int length);
+void ringbuffer_advance_read_head(ringbuffer_t * __restrict r, int len){
+    r->head=(r->head+len)&(RINGBUFFER_SIZE-1);
+    if(r->head==r->tail){
+        r->head=r->tail=0;
+    }
+}
+void ringbuffer_advance_write_head(ringbuffer_t * __restrict r, int len){
+    r->tail=(r->tail+len)&(RINGBUFFER_SIZE-1);
+}
+char *ringbuffer_write_ptr(ringbuffer_t * __restrict r){
+    return r->buf+r->tail;
+}
+void ringbuffer_reset(ringbuffer_t * __restrict r){
+    r->head=r->tail=0;
+}
 
-int ringbuffer_size(ringbuffer *rb);
-int ringbuffer_capacity(ringbuffer *rb);
-int ringbuffer_is_empty(ringbuffer *rb);
-int ringbuffer_is_full(ringbuffer *rb);
-
-#endif /* RINGBUFFER_H */
+#endif
