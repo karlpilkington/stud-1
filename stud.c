@@ -1000,7 +1000,7 @@ static void clear_read(struct ev_loop *loop, ev_io *w, int revents) {
 
     if (t > 0) {
         if (ringbuffer_write_append(&ps->ring_clear2ssl, t))
-            return shutdown_proxy(ps, SHUTDOWN_CLEAR);
+            return shutdown_proxy(ps, SHUTDOWN_CLEAR, fd == ps->fd_down);
 
         if (ringbuffer_is_full(&ps->ring_clear2ssl))
             ev_io_stop(loop, &ps->ev_r_clear);
@@ -1352,7 +1352,7 @@ static void ssl_read(struct ev_loop *loop, ev_io *w, int revents) {
 
     if (t > 0) {
         if (ringbuffer_write_append(&ps->ring_ssl2clear, t))
-            return shutdown_proxy(ps, SHUTDOWN_SSL);
+            return shutdown_proxy(ps, SHUTDOWN_SSL, w->fd == ps->fd_up ? 0 : 1);
         if (ringbuffer_is_full(&ps->ring_ssl2clear))
             ev_io_stop(loop, &ps->ev_r_ssl);
         if (ps->clear_connected)
