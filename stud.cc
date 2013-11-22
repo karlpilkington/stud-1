@@ -194,7 +194,7 @@ size_t SPool24K_Size;
       if (CONFIG->SYSLOG) syslog(LOG_INFO, __VA_ARGS__);    \
     } while(0)
 
-#define ERR(...)                                            \
+#define L_ERR(...)                                            \
     do {                                                    \
       fprintf(stderr, __VA_ARGS__);                         \
       if (CONFIG->SYSLOG) syslog(LOG_ERR, __VA_ARGS__);     \
@@ -230,13 +230,13 @@ static void settcpkeepalive(int fd) {
     socklen_t optlen = sizeof(optval);
 
     if(setsockopt(fd, SOL_SOCKET, SO_KEEPALIVE, &optval, optlen) < 0) {
-        ERR("Error activating SO_KEEPALIVE on client socket: %s", strerror(errno));
+        L_ERR("Error activating SO_KEEPALIVE on client socket: %s", strerror(errno));
     }
 /*  #ifdef TCP_KEEPIDLE
     optval = CONFIG->TCP_KEEPALIVE_TIME;
     optlen = sizeof(optval);
     if(setsockopt(fd, SOL_TCP, TCP_KEEPALIVE, &optval, optlen) < 0) {
-        ERR("Error setting TCP_KEEPALIVE on client socket: %s", strerror(errno));
+        L_ERR("Error setting TCP_KEEPALIVE on client socket: %s", strerror(errno));
     }
 #endif  */
 }
@@ -271,7 +271,7 @@ static int init_dh(SSL_CTX *ctx, const char *cert) {
     dh = PEM_read_bio_DHparams(bio, NULL, NULL, NULL);
     BIO_free(bio);
     if (!dh) {
-        ERR("{core} Note: no DH parameters found in %s\n", cert);
+        L_ERR("{core} Note: no DH parameters found in %s\n", cert);
         return -1;
     }
 
@@ -407,14 +407,14 @@ static int create_shcupd_socket() {
     const int gai_err = getaddrinfo(CONFIG->SHCUPD_IP, CONFIG->SHCUPD_PORT,
                                     &hints, &ai);
     if (gai_err != 0) {
-        ERR("{getaddrinfo}: [%s]\n", gai_strerror(gai_err));
+        L_ERR("{getaddrinfo}: [%s]\n", gai_strerror(gai_err));
         exit(1);
     }
 
     /* check if peers inet family addresses match */
     while (*pai) {
         if ((*pai)->ai_family != ai->ai_family) {
-            ERR("Share host and peers inet family differs\n");
+            L_ERR("Share host and peers inet family differs\n");
             exit(1);
         }
         pai++;
@@ -445,7 +445,7 @@ static int create_shcupd_socket() {
 
                 memset(&ifr, 0, sizeof(ifr));
                 if (strlen(CONFIG->SHCUPD_MCASTIF) > IFNAMSIZ) {
-                    ERR("Error iface name is too long [%s]\n",CONFIG->SHCUPD_MCASTIF);
+                    L_ERR("Error iface name is too long [%s]\n",CONFIG->SHCUPD_MCASTIF);
                     exit(1);
                 }
 
@@ -508,7 +508,7 @@ static int create_shcupd_socket() {
 
                 memset(&ifr, 0, sizeof(ifr));
                 if (strlen(CONFIG->SHCUPD_MCASTIF) > IFNAMSIZ) {
-                    ERR("Error iface name is too long [%s]\n",CONFIG->SHCUPD_MCASTIF);
+                    L_ERR("Error iface name is too long [%s]\n",CONFIG->SHCUPD_MCASTIF);
                     exit(1);
                 }
 
@@ -662,7 +662,7 @@ SSL_CTX *make_ctx(const char *pemfile) {
 
     rsa = load_rsa_privatekey(ctx, pemfile);
     if (!rsa) {
-       ERR("Error loading rsa private key\n");
+       L_ERR("Error loading rsa private key\n");
        exit(1);
     }
 
@@ -677,19 +677,19 @@ SSL_CTX *make_ctx(const char *pemfile) {
 
 #ifndef OPENSSL_NO_TLSEXT
     if (!SSL_CTX_set_tlsext_servername_callback(ctx, sni_switch_ctx)) {
-        ERR("Error setting up SNI support\n");
+        L_ERR("Error setting up SNI support\n");
     }
 #endif /* OPENSSL_NO_TLSEXT */
 
 #ifdef USE_SHARED_CACHE
     if (CONFIG->SHARED_CACHE) {
         if (shared_context_init(ctx, CONFIG->SHARED_CACHE) < 0) {
-            ERR("Unable to alloc memory for shared cache.\n");
+            L_ERR("Unable to alloc memory for shared cache.\n");
             exit(1);
         }
         if (CONFIG->SHCUPD_PORT) {
             if (compute_secret(rsa, shared_secret) < 0) {
-                ERR("Unable to compute shared secret.\n");
+                L_ERR("Unable to compute shared secret.\n");
                 exit(1);
             }
 
@@ -781,7 +781,7 @@ void init_openssl() {
         f = BIO_new(BIO_s_file());
         // TODO: error checking
         if (!BIO_read_filename(f, cf->CERT_FILE)) {
-            ERR("Could not read cert '%s'\n", cf->CERT_FILE);
+            L_ERR("Could not read cert '%s'\n", cf->CERT_FILE);
         }
         x509 = PEM_read_bio_X509_AUX(f, NULL, NULL, NULL);
         BIO_free(f);
@@ -806,7 +806,7 @@ void init_openssl() {
         X509_NAME *x509_name = X509_get_subject_name(x509);
         i = X509_NAME_get_index_by_NID(x509_name, NID_commonName, -1);
         if (i < 0) {
-            ERR("Could not find Subject Alternative Names or a CN on cert %s\n",
+            L_ERR("Could not find Subject Alternative Names or a CN on cert %s\n",
                     cf->CERT_FILE);
         }
         X509_NAME_ENTRY *x509_entry = X509_NAME_get_entry(x509_name, i);
@@ -841,25 +841,15 @@ static void prepare_proxy_line(struct sockaddr* ai_addr) {
 
     if (ai_addr->sa_family == AF_INET) {
         struct sockaddr_in* addr = (struct sockaddr_in*)ai_addr;
-        size_t res = snprintf(tcp_proxy_line,
-                sizeof(tcp_proxy_line),
-                "PROXY %%s %%s %s %%hu %hu\r\n",
-                inet_ntoa(addr->sin_addr),
-                ntohs(addr->sin_port));
-        assert(res < sizeof(tcp_proxy_line));
+        snprintf(tcp_proxy_line, sizeof(tcp_proxy_line), "PROXY %%s %%s %s %%hu %hu\r\n", inet_ntoa(addr->sin_addr), ntohs(addr->sin_port));
     }
     else if (ai_addr->sa_family == AF_INET6 ) {
       struct sockaddr_in6* addr = (struct sockaddr_in6*)ai_addr;
       inet_ntop(AF_INET6,&(addr->sin6_addr),tcp6_address_string,INET6_ADDRSTRLEN);
-      size_t res = snprintf(tcp_proxy_line,
-                            sizeof(tcp_proxy_line),
-                            "PROXY %%s %%s %s %%hu %hu\r\n",
-                            tcp6_address_string,
-                            ntohs(addr->sin6_port));
-      assert(res < sizeof(tcp_proxy_line));
+      snprintf(tcp_proxy_line, sizeof(tcp_proxy_line), "PROXY %%s %%s %s %%hu %hu\r\n", tcp6_address_string, ntohs(addr->sin6_port));
     }
     else {
-        ERR("The --write-proxy mode is not implemented for this address family.\n");
+        L_ERR("The --write-proxy mode is not implemented for this address family.\n");
         exit(1);
     }
 }
@@ -874,7 +864,7 @@ static int create_main_socket() {
     const int gai_err = getaddrinfo(CONFIG->FRONT_IP, CONFIG->FRONT_PORT,
                                     &hints, &ai);
     if (gai_err != 0) {
-        ERR("{getaddrinfo}: [%s]\n", gai_strerror(gai_err));
+        L_ERR("{getaddrinfo}: [%s]\n", gai_strerror(gai_err));
         exit(1);
     }
 
@@ -974,11 +964,11 @@ static inline void handle_socket_errno(proxystate *ps, int backend) {
         return;
 
     if (errno == ECONNRESET)
-        ERR("{%s} Connection reset by peer\n", backend ? "backend" : "client");
+        L_ERR("{%s} Connection reset by peer\n", backend ? "backend" : "client");
     else if (errno == ETIMEDOUT)
-        ERR("{%s} Connection to backend timed out\n", backend ? "backend" : "client");
+        L_ERR("{%s} Connection to backend timed out\n", backend ? "backend" : "client");
     else if (errno == EPIPE)
-        ERR("{%s} Broken pipe to backend (EPIPE)\n", backend ? "backend" : "client");
+        L_ERR("{%s} Broken pipe to backend (EPIPE)\n", backend ? "backend" : "client");
     else
         perror("{backend} [errno]");
     shutdown_proxy(ps, SHUTDOWN_CLEAR);
@@ -1388,14 +1378,14 @@ static void client_handshake(struct ev_loop *loop, ev_io *w, int revents) {
 /* Handle a socket error condition passed to us from OpenSSL */
 static void handle_fatal_ssl_error(proxystate *ps, int err, int backend) {
     if (err == SSL_ERROR_ZERO_RETURN)
-        ERR("{%s} Connection closed (in data)\n", backend ? "backend" : "client");
+        L_ERR("{%s} Connection closed (in data)\n", backend ? "backend" : "client");
     else if (err == SSL_ERROR_SYSCALL)
         if (errno == 0)
-            ERR("{%s} Connection closed (in data)\n", backend ? "backend" : "client");
+            L_ERR("{%s} Connection closed (in data)\n", backend ? "backend" : "client");
         else
             perror(backend ? "{backend} [errno] " : "{client} [errno] ");
     else
-        ERR("{%s} Unexpected SSL_read error: %d\n", backend ? "backend" : "client" , err);
+        L_ERR("{%s} Unexpected SSL_read error: %d\n", backend ? "backend" : "client" , err);
     shutdown_proxy(ps, SHUTDOWN_SSL);
 }
 
@@ -1532,15 +1522,15 @@ static void handle_accept(struct ev_loop *loop, ev_io *w, int revents) {
     if (client == -1) {
         switch (errno) {
         case EMFILE:
-            ERR("{client} accept() failed; too many open files for this process\n");
+            L_ERR("{client} accept() failed; too many open files for this process\n");
             break;
 
         case ENFILE:
-            ERR("{client} accept() failed; too many open files for this system\n");
+            L_ERR("{client} accept() failed; too many open files for this system\n");
             break;
 
 	case ECONNABORTED:
-	  ERR("{client} accept() failed; client went away while negotiating TCP with Solaris ECONNABORTED\n");
+	  L_ERR("{client} accept() failed; client went away while negotiating TCP with Solaris ECONNABORTED\n");
 	  break;
 
         default:
@@ -1610,7 +1600,12 @@ static void handle_accept(struct ev_loop *loop, ev_io *w, int revents) {
     ringbuffer_init(&ps->ring_clear2ssl,ps->buf+RINGBUFFER_SIZE);
 
     /* set up events */
-    ev_io_init(&ps->ev_r_ssl, ssl_read, client, EV_READ);
+    ev_io_init(
+	       &ps->ev_r_ssl,
+	       ssl_read,
+	       client,
+	       EV_READ
+	       );
     ev_io_init(&ps->ev_w_ssl, ssl_write, client, EV_WRITE);
 
     ev_io_init(&ps->ev_r_handshake, client_handshake, client, EV_READ);
@@ -1648,7 +1643,7 @@ static void check_ppid(struct ev_loop *loop, ev_timer *w, int revents) {
     (void) revents;
     pid_t ppid = getppid();
     if (ppid != master_pid) {
-        ERR("{core} Process %d detected parent death, closing listener socket.\n", child_num);
+        L_ERR("{core} Process %d detected parent death, closing listener socket.\n", child_num);
         ev_timer_stop(loop, w);
         ev_io_stop(loop, &listener);
         close(listener_socket);
@@ -1665,11 +1660,11 @@ static void handle_clear_accept(struct ev_loop *loop, ev_io *w, int revents) {
     if (client == -1) {
         switch (errno) {
         case EMFILE:
-            ERR("{client} accept() failed; too many open files for this process\n");
+            L_ERR("{client} accept() failed; too many open files for this process\n");
             break;
 
         case ENFILE:
-            ERR("{client} accept() failed; too many open files for this system\n");
+            L_ERR("{client} accept() failed; too many open files for this system\n");
             break;
 
         default:
@@ -1774,7 +1769,7 @@ static void handle_connections() {
     if (!res)
         LOG("{core} Successfully attached to CPU #%d\n", child_num);
     else
-        ERR("{core-warning} Unable to attach to CPU #%d; do you have that many cores?\n", child_num);
+        L_ERR("{core-warning} Unable to attach to CPU #%d; do you have that many cores?\n", child_num);
 #endif
 
     loop = ev_default_loop(EVFLAG_AUTO);
@@ -1788,7 +1783,7 @@ static void handle_connections() {
     ev_io_start(loop, &listener);
 
     ev_loop(loop, 0);
-    ERR("{core} Child %d exiting.\n", child_num);
+    L_ERR("{core} Child %d exiting.\n", child_num);
     exit(1);
 }
 
@@ -1817,7 +1812,7 @@ void init_globals() {
     const int gai_err = getaddrinfo(CONFIG->BACK_IP, CONFIG->BACK_PORT,
                                     &hints, &backaddr);
     if (gai_err != 0) {
-        ERR("{getaddrinfo}: [%s]", gai_strerror(gai_err));
+        L_ERR("{getaddrinfo}: [%s]", gai_strerror(gai_err));
         exit(1);
     }
 
@@ -1835,7 +1830,7 @@ void init_globals() {
             const int gai_err = getaddrinfo(spo->ip,
                                 spo->port ? spo->port : CONFIG->SHCUPD_PORT, &hints, pai);
             if (gai_err != 0) {
-                ERR("{getaddrinfo}: [%s]", gai_strerror(gai_err));
+                L_ERR("{getaddrinfo}: [%s]", gai_strerror(gai_err));
                 exit(1);
             }
             spo++;
@@ -1863,7 +1858,7 @@ void start_children(int start_index, int count) {
     for (child_num = start_index; child_num < start_index + count; child_num++) {
         int pid = fork();
         if (pid == -1) {
-            ERR("{core} fork() failed: %s; Goodbye cruel world!\n", strerror(errno));
+            L_ERR("{core} fork() failed: %s; Goodbye cruel world!\n", strerror(errno));
             exit(1);
         }
         else if (pid == 0) { /* child */
@@ -1888,7 +1883,7 @@ void replace_child_with_pid(pid_t pid) {
         }
     }
 
-    ERR("Cannot find index for child pid %d", pid);
+    L_ERR("Cannot find index for child pid %d", pid);
 }
 
 /* Manage status changes in child processes */
@@ -1899,11 +1894,11 @@ static void do_wait(int __attribute__ ((unused)) signo) {
 
     if (pid == -1) {
         if (errno == ECHILD) {
-            ERR("{core} All children have exited! Restarting...\n");
+            L_ERR("{core} All children have exited! Restarting...\n");
             start_children(0, CONFIG->NCORES);
         }
         else if (errno == EINTR) {
-            ERR("{core} Interrupted wait\n");
+            L_ERR("{core} Interrupted wait\n");
         }
         else {
             fail("wait");
@@ -1911,11 +1906,11 @@ static void do_wait(int __attribute__ ((unused)) signo) {
     }
     else {
         if (WIFEXITED(status)) {
-            ERR("{core} Child %d exited with status %d. Replacing...\n", pid, WEXITSTATUS(status));
+            L_ERR("{core} Child %d exited with status %d. Replacing...\n", pid, WEXITSTATUS(status));
             replace_child_with_pid(pid);
         }
         else if (WIFSIGNALED(status)) {
-            ERR("{core} Child %d was terminated by signal %d. Replacing...\n", pid, WTERMSIG(status));
+            L_ERR("{core} Child %d was terminated by signal %d. Replacing...\n", pid, WTERMSIG(status));
             replace_child_with_pid(pid);
         }
     }
@@ -1934,7 +1929,7 @@ static void sigh_terminate (int __attribute__ ((unused)) signo) {
         for (i = 0; i < CONFIG->NCORES; i++) {
             /* LOG("Stopping worker pid %d.\n", child_pids[i]); */
             if (child_pids[i] > 1 && kill(child_pids[i], SIGTERM) != 0) {
-                ERR("{core} Unable to send SIGTERM to worker pid %d: %s\n", child_pids[i], strerror(errno));
+                L_ERR("{core} Unable to send SIGTERM to worker pid %d: %s\n", child_pids[i], strerror(errno));
             }
         }
         /* LOG("Shutdown complete.\n"); */
@@ -1968,11 +1963,11 @@ void init_signals() {
     act.sa_flags = 0;
     act.sa_handler = sigh_terminate;
     if (sigaction(SIGINT, &act, NULL) < 0) {
-        ERR("Unable to register SIGINT signal handler: %s\n", strerror(errno));
+        L_ERR("Unable to register SIGINT signal handler: %s\n", strerror(errno));
         exit(1);
     }
     if (sigaction(SIGTERM, &act, NULL) < 0) {
-        ERR("Unable to register SIGTERM signal handler: %s\n", strerror(errno));
+        L_ERR("Unable to register SIGTERM signal handler: %s\n", strerror(errno));
         exit(1);
     }
 }
@@ -1980,14 +1975,14 @@ void init_signals() {
 void daemonize () {
     /* go to root directory */
     if (chdir("/") != 0) {
-        ERR("Unable change directory to /: %s\n", strerror(errno));
+        L_ERR("Unable change directory to /: %s\n", strerror(errno));
         exit(1);
     }
 
     /* let's make some children, baby :) */
     pid_t pid = fork();
     if (pid < 0) {
-        ERR("Unable to daemonize: fork failed: %s\n", strerror(errno));
+        L_ERR("Unable to daemonize: fork failed: %s\n", strerror(errno));
         exit(1);
     }
 
@@ -2000,24 +1995,24 @@ void daemonize () {
     /* reopen standard streams to null device */
     freopen(NULL_DEV, "r", stdin);
     if (stdin == NULL) {
-        ERR("Unable to reopen stdin to %s: %s\n", NULL_DEV, strerror(errno));
+        L_ERR("Unable to reopen stdin to %s: %s\n", NULL_DEV, strerror(errno));
         exit(1);
     }
     freopen(NULL_DEV, "w", stdout);
     if (stdout == NULL) {
-        ERR("Unable to reopen stdout to %s: %s\n", NULL_DEV, strerror(errno));
+        L_ERR("Unable to reopen stdout to %s: %s\n", NULL_DEV, strerror(errno));
         exit(1);
     }
     freopen(NULL_DEV, "w", stderr);
     if (stderr == NULL) {
-        ERR("Unable to reopen stderr to %s: %s\n", NULL_DEV, strerror(errno));
+        L_ERR("Unable to reopen stderr to %s: %s\n", NULL_DEV, strerror(errno));
         exit(1);
     }
 
     /* this is child, the new master */
     pid_t s = setsid();
     if (s < 0) {
-        ERR("Unable to create new session, setsid(2) failed: %s :: %d\n", strerror(errno), s);
+        L_ERR("Unable to create new session, setsid(2) failed: %s :: %d\n", strerror(errno), s);
         exit(1);
     }
 
@@ -2031,7 +2026,7 @@ void openssl_check_version() {
     /* check if we're running the same openssl that we were */
     /* compiled with */
     if ((openssl_version ^ OPENSSL_VERSION_NUMBER) & ~0xff0L) {
-        ERR(
+        L_ERR(
             "WARNING: {core} OpenSSL version mismatch; stud was compiled with %lx, now using %lx.\n",
             (unsigned long int) OPENSSL_VERSION_NUMBER,
             (unsigned long int) openssl_version

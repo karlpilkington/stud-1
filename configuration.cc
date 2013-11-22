@@ -20,7 +20,27 @@
 #include <syslog.h>
 
 #ifdef __sun
-#include <netinet/ip_compat.h>
+#ifndef	LOG_FTP
+# define	LOG_FTP		(11<<3)
+#endif
+#ifndef	LOG_AUTHPRIV
+# define	LOG_AUTHPRIV	(10<<3)
+#endif
+#ifndef	LOG_AUDIT
+# define	LOG_AUDIT	(13<<3)
+#endif
+#ifndef	LOG_NTP
+# define	LOG_NTP		(12<<3)
+#endif
+#ifndef	LOG_SECURITY
+# define	LOG_SECURITY	(13<<3)
+#endif
+#ifndef	LOG_LFMT
+# define	LOG_LFMT	(14<<3)
+#endif
+#ifndef	LOG_CONSOLE
+# define	LOG_CONSOLE	(14<<3)
+#endif
 #endif
 
 #include "configuration.h"
