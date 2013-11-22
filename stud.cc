@@ -1074,7 +1074,10 @@ static void clear_read(struct ev_loop *loop, ev_io *w, int revents) {
             if(unlikely(need_append)){
                 ringbuffer_append(ring,buf+prev_len,offset-prev_len);
             }
-            if (unlikely(ringbuffer_is_full(ring))){
+            if (unlikely(!ringbuffer_is_empty(ring))){
+                // we stop the read from clear, because SSL_write expects to be retried
+                // with the same contents
+                // http://www.openssl.org/docs/ssl/SSL_write.html
                 ev_io_stop(loop, &ps->ev_r_clear);
                 break;
             }
@@ -1575,7 +1578,7 @@ static void handle_accept(struct ev_loop *loop, ev_io *w, int revents) {
 
     SSL_CTX * ctx = (SSL_CTX *)w->data;
     SSL *ssl = SSL_new(ctx);
-    long mode = SSL_MODE_ENABLE_PARTIAL_WRITE;
+    long mode = SSL_MODE_ENABLE_PARTIAL_WRITE | SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER;
 #ifdef SSL_MODE_RELEASE_BUFFERS
     mode |= SSL_MODE_RELEASE_BUFFERS;
 #endif
@@ -1702,7 +1705,7 @@ static void handle_clear_accept(struct ev_loop *loop, ev_io *w, int revents) {
 
     SSL_CTX * ctx = (SSL_CTX *)w->data;
     SSL *ssl = SSL_new(ctx);
-    long mode = SSL_MODE_ENABLE_PARTIAL_WRITE;
+    long mode = SSL_MODE_ENABLE_PARTIAL_WRITE | SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER;
 #ifdef SSL_MODE_RELEASE_BUFFERS
     mode |= SSL_MODE_RELEASE_BUFFERS;
 #endif
