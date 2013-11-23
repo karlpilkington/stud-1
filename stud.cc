@@ -200,36 +200,36 @@ size_t SPool24K_Size;
 
 #define NULL_DEV "/dev/null"
 
-static int get_client_info(proxystate* ps, char* host, size_t host_size) {
-  struct sockaddr_in* addr = (struct sockaddr_in*) &ps->remote_ip;
+void get_client_info(proxystate* ps, char* host, size_t host_size, int* port) {
+    struct sockaddr_in* addr = (struct sockaddr_in*) &ps->remote_ip;
 
-  if (addr->sin_family == AF_INET) {
-    inet_ntoa_r(addr->sin_addr, host, host_size);
-  }
-  else if (addr->sin_family == AF_INET6 ) {
-    struct sockaddr_in6* addr6 = (struct sockaddr_in6*) addr;
-    inet_ntop(AF_INET6, &(addr6->sin6_addr), host, host_size);
-  }
-  return ntohs(addr->sin_port);
+    if (addr->sin_family == AF_INET) {
+        inet_ntop(AF_INET, &(addr->sin_addr), host, host_size);
+        *port = ntohs(addr->sin_port);
+    } else if (addr->sin_family == AF_INET6 ) {
+        struct sockaddr_in6* addr6 = (struct sockaddr_in6*) &ps->remote_ip;
+        inet_ntop(AF_INET6, &(addr6->sin6_addr), host, host_size);
+        *port = ntohs(addr6->sin6_port);
+    }
 }
 
 /* Set a file descriptor (socket) to non-blocking mode */
 static void setnonblocking(int fd) {
-  int flag;
-  int r;
+    int flag;
+    int r;
 #if defined(O_NONBLOCK)
-  /* O_NONBLOCK is more portable and POSIX-standard */
-  flag = O_NONBLOCK;
-  do
-    r = fcntl(fd, F_SETFL, flag);
-  while (r == -1 && errno == EINTR);
-  assert(r == 0);
+    /* O_NONBLOCK is more portable and POSIX-standard */
+    flag = O_NONBLOCK;
+    do
+        r = fcntl(fd, F_SETFL, flag);
+    while (r == -1 && errno == EINTR);
+    assert(r == 0);
 #elif defined(FIONBIO)
-  flag = 1;
-  do
-    r = ioctl(fd, FIONBIO, &set);
-  while (r == -1 && errno == EINTR);
-  assert(r == 0);
+    flag = 1;
+    do
+        r = ioctl(fd, FIONBIO, &set);
+    while (r == -1 && errno == EINTR);
+    assert(r == 0);
 #else
 # error O_NONBLOCK and FIONBIO are both undefined for this platform
 #endif
@@ -282,7 +282,7 @@ static int init_dh(SSL_CTX *ctx, const char *cert) {
     dh = PEM_read_bio_DHparams(bio, NULL, NULL, NULL);
     BIO_free(bio);
     if (!dh) {
-        L_ERR("{core} Note: no DH parameters found in %s\n", cert);
+        L_ERR("op=init_no_dh no DH parameters found in %s\n", cert);
         return -1;
     }
 
@@ -937,9 +937,10 @@ static inline void safe_enable_io(proxystate *ps, ev_io *w) {
 
 /* Only enable a libev ev_io event if the proxied connection still
  * has both up and down connected */
-static void shutdown_proxy(proxystate *ps, SHUTDOWN_REQUESTOR req, int backend) {
+static void shutdown_proxy(proxystate *ps, SHUTDOWN_REQUESTOR req, int backend, char *reason) {
     if (ps->want_shutdown || (req == SHUTDOWN_HARD) || (req == SHUTDOWN_CLEAR && ringbuffer_is_empty(&ps->ring_clear2ssl)) || 
-            (req == SHUTDOWN_SSL && ringbuffer_is_empty(&ps->ring_ssl2clear))) {
+        (req == SHUTDOWN_SSL && ringbuffer_is_empty(&ps->ring_ssl2clear))) {
+
         ev_io_stop(loop, &ps->ev_w_ssl);
         ev_io_stop(loop, &ps->ev_r_ssl);
         ev_io_stop(loop, &ps->ev_w_handshake);
@@ -948,49 +949,56 @@ static void shutdown_proxy(proxystate *ps, SHUTDOWN_REQUESTOR req, int backend) 
         ev_io_stop(loop, &ps->ev_w_clear);
         ev_io_stop(loop, &ps->ev_r_clear);
         ev_io_stop(loop, &ps->ev_proxy);
-
+        
         close(ps->fd_up);
         close(ps->fd_down);
-
+        
         SSL_set_shutdown(ps->ssl, SSL_SENT_SHUTDOWN);
         SSL_free(ps->ssl);
         ERR_clear_error();
-
+        
         // Make use-after-free fail immediately
         ps->fd_up = -1;
         ps->fd_down = -1;
         ps->ssl = NULL;
-
+        
         SPool.Release(ps);
-
-	if (STUD_CLOSE_SIDE_ENABLED() || !CONFIG->QUIET) {
-	  char host[INET6_ADDRSTRLEN];
-	  int port = get_client_info(ps, host, sizeof(host));
-	  LOG("op=\"stud connection closed\" client=\"%s:%d\" backend=\"%d\"\n", host, port, backend);
-          STUD_CLOSE_SIDE(host, port, backend);
-	}
-    }
-    else {
+        
+        char host[INET6_ADDRSTRLEN];
+        int port = -1;
+        get_client_info(ps, host, sizeof(host), &port);
+        LOG("op=\"connection closed\" client=%s:%d direction=%s reason=\"%s\"\n", 
+            host, port, backend ? "backend" : "client", reason);
+        if (STUD_CLOSE_SIDE_ENABLED() || !CONFIG->QUIET)
+            STUD_CLOSE_SIDE(host, port, backend);
+    } else {
         ps->want_shutdown = 1;
     }
 }
 
-/* Handle various socket errors */
+// Handle various socket errors
 static inline void handle_socket_errno(proxystate *ps, int backend) {
     if (errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR)
         return;
 
+    char *reason;
+
     if (errno == ECONNRESET)
-        L_ERR("{%s} Connection reset by peer\n", backend ? "backend" : "client");
+        reason = (char *)"Connection reset by peer";
     else if (errno == ETIMEDOUT)
-        L_ERR("{%s} Connection to backend timed out\n", backend ? "backend" : "client");
+        reason = (char *)"Connection to backend timed out";
     else if (errno == EPIPE)
-        L_ERR("{%s} Broken pipe to backend (EPIPE)\n", backend ? "backend" : "client");
-    else
-        perror("{backend} [errno]");
-    shutdown_proxy(ps, SHUTDOWN_CLEAR, backend);
+        reason = (char *)"Broken pipe to backend";
+    else {
+        char reason2[1024];
+        strerror_r(errno, reason2, 1024);
+        reason = reason2;
+    }
+
+    shutdown_proxy(ps, SHUTDOWN_CLEAR, backend, reason);
 }
-/* Start connect to backend */
+
+// Start connect to backend
 static int start_connect(proxystate *ps) {
     int t = 1;
     t = connect(ps->fd_down, backaddr->ai_addr, backaddr->ai_addrlen);
@@ -998,8 +1006,9 @@ static int start_connect(proxystate *ps) {
         ev_io_start(loop, &ps->ev_w_connect);
         return 0;
     }
-    perror("{backend-connect}");
-    shutdown_proxy(ps, SHUTDOWN_HARD, 1);
+    char reason[1024];
+    strerror_r(errno, reason, 1024);
+    shutdown_proxy(ps, SHUTDOWN_HARD, 1, reason);
     return -1;
 }
 static void start_handshake(proxystate *ps, int err);
@@ -1018,57 +1027,55 @@ static void clear_read(struct ev_loop *loop, ev_io *w, int revents) {
     int fd = w->fd;
 
     char buf[RINGBUFFER_SIZE-1];
-    ringbuffer_t *ring=&ps->ring_clear2ssl;
-    bool process_more_data=false;
-    do{
-        int prev_len=ringbuffer_available_to_read(ring);
+    ringbuffer_t *ring = &ps->ring_clear2ssl;
+    bool process_more_data = false;
+    do {
+        int prev_len = ringbuffer_available_to_read(ring);
         // get previously buffered data 
-        if(unlikely(prev_len >= (int)sizeof(buf))){
+        if (unlikely(prev_len >= (int)sizeof(buf))){
             // the buffer is full
             ev_io_stop(loop, &ps->ev_r_clear);
             break;
         }
-        int offset=prev_len,ret;
+        int offset = prev_len,ret;
         process_more_data=false;
         while(offset < (int)sizeof(buf)){
-            //ret = read(fd, buf+offset, sizeof(buf)-offset);
             ret = recv(fd, buf+offset, sizeof(buf)-offset, MSG_DONTWAIT);
             if(ret <=0){
                 break;
             }
-            offset+=ret;
+            offset += ret;
         }
-        int saved_errno=errno;
+        int saved_errno = errno;
         if (likely(offset > 0)) {
             bool need_append=true;
             // we check if the other end is connected, we just forward it
-            if (likely(ps->handshaked)){
+            if (likely(ps->handshaked)) {
                 //write the data
                 //check for other data waiting to be written and append and write it
-                if(unlikely(prev_len > 0)){
+                if (unlikely(prev_len > 0)) {
                     ringbuffer_get2(ring,buf,prev_len);
                 }
                 int ret = SSL_write(ps->ssl, buf, offset);
-                if(likely(ret > 0)){
+                if (likely(ret > 0)) {
                     ringbuffer_advance_read_head(ring,ret < prev_len?ret:prev_len);
-                    if(unlikely(ret < offset)){
-                        //append data to ring
+                    if (unlikely(ret < offset)) {
                         ringbuffer_append(ring,buf+ret,offset-ret);
                     }
-                    need_append=false;
-                }else {
+                    need_append = false;
+                } else {
                     int err = SSL_get_error(ps->ssl, ret);
                     if (err == SSL_ERROR_WANT_READ){
                         start_handshake(ps, err);
-                    }else if (err == SSL_ERROR_WANT_WRITE) {
+                    } else if (err == SSL_ERROR_WANT_WRITE) {
                         /*  SSL socket is backed up */
-                    }else{
+                    } else {
                         //remote end has closed connection
                         //we have to write out anything that client has written 
                         //but we have not sent to backend
-                        ringbuffer_t *ring2=&ps->ring_ssl2clear;
-                        int unwritten=ringbuffer_available_to_read(ring2);
-                        if(unlikely(unwritten > 0)){
+                        ringbuffer_t *ring2 = &ps->ring_ssl2clear;
+                        int unwritten = ringbuffer_available_to_read(ring2);
+                        if (unlikely(unwritten > 0)) {
                             char tmpbuf[unwritten];
                             ringbuffer_get2(ring2,tmpbuf,unwritten);
                             send(ps->fd_down, tmpbuf, unwritten, MSG_NOSIGNAL);
@@ -1078,10 +1085,10 @@ static void clear_read(struct ev_loop *loop, ev_io *w, int revents) {
                     }
                 }
             }
-            if(unlikely(need_append)){
+            if (unlikely(need_append)) {
                 ringbuffer_append(ring,buf+prev_len,offset-prev_len);
             }
-            if (unlikely(!ringbuffer_is_empty(ring))){
+            if (unlikely(!ringbuffer_is_empty(ring))) {
                 // we stop the read from clear, because SSL_write expects to be retried
                 // with the same contents
                 // http://www.openssl.org/docs/ssl/SSL_write.html
@@ -1089,21 +1096,21 @@ static void clear_read(struct ev_loop *loop, ev_io *w, int revents) {
                 break;
             }
         }
-        if(likely(ret==-1)){
-             if(unlikely((saved_errno!= EAGAIN) || (saved_errno!=EWOULDBLOCK) || (saved_errno!=EINTR))){
+        if (likely(ret==-1)) {
+             if (unlikely((saved_errno!= EAGAIN) || (saved_errno!=EWOULDBLOCK) || (saved_errno!=EINTR))) {
                 assert(ret == -1);
                 errno=saved_errno;
                 handle_socket_errno(ps, fd == ps->fd_down ? 1 : 0);
             }
-        }else if(ret > 0){
+        } else if(ret > 0) {
             // we filled the buffer, but there may be more data to read
-            process_more_data=true;
-        }else if (ret  == 0) {
-            LOG("{%s} Connection closed\n", fd == ps->fd_down ? "backend" : "client");
-            shutdown_proxy(ps, SHUTDOWN_CLEAR, fd == ps->fd_down);
+            process_more_data = true;
+        } else if (ret  == 0) {
+            shutdown_proxy(ps, SHUTDOWN_CLEAR, fd == ps->fd_down, (char *)"connection closed");
         }   
-    }while(process_more_data);
-    if (unlikely(!ringbuffer_is_empty(ring) && ps->handshaked)){
+    } while(process_more_data);
+
+    if (unlikely(!ringbuffer_is_empty(ring) && ps->handshaked)) {
         safe_enable_io(ps, &ps->ev_w_ssl);
     }
 }
@@ -1114,10 +1121,6 @@ static void clear_write(struct ev_loop *loop, ev_io *w, int revents) {
     (void) revents;
     int t;
     proxystate *ps = (proxystate *)w->data;
-    /* if(unlikely(ps->fd_down==-1)){
-        // the connection is closed
-        return;
-    } */
     int fd = w->fd;
     int sz;
     ringbuffer_t *ring=&ps->ring_ssl2clear;
@@ -1134,21 +1137,20 @@ static void clear_write(struct ev_loop *loop, ev_io *w, int revents) {
     if (likely(t > 0)) {
         ringbuffer_advance_read_head(ring,t);
         if (t == sz) {
-            if (ps->handshaked){
+            if (ps->handshaked) {
                 safe_enable_io(ps, &ps->ev_r_ssl);
             }
             if (ps->want_shutdown) {
-  	        shutdown_proxy(ps, SHUTDOWN_HARD, 1);
+                shutdown_proxy(ps, SHUTDOWN_HARD, 1, (char *)"write failed"); // TODO - what causes this?
                 return; // dealloc'd
             }
             ev_io_stop(loop, &ps->ev_w_clear);
         }
-    }else {
+    } else {
         assert(t == -1);
         handle_socket_errno(ps, fd == ps->fd_down ? 1 : 0);
     }
 }
-
 
 /* Continue/complete the asynchronous connect() before starting data transmission
  * between front/backend */
@@ -1171,18 +1173,16 @@ static void handle_connect(struct ev_loop *loop, ev_io *w, int revents) {
             if (!ringbuffer_is_empty(&ps->ring_ssl2clear))
                 // not safe.. we want to resume stream even during half-closed
                 ev_io_start(loop, &ps->ev_w_clear);
-        }
-        else {
+        } else {
             /* Clear side already connected so connect is on secure side: perform handshake */
             start_handshake(ps, SSL_ERROR_WANT_WRITE);
         }
-    }
-    else if (errno == EINPROGRESS || errno == EINTR || errno == EALREADY) {
+    } else if (errno == EINPROGRESS || errno == EINTR || errno == EALREADY) {
         /* do nothing, we'll get phoned home again... */
-    }
-    else {
-        perror("{backend-connect}");
-        shutdown_proxy(ps, SHUTDOWN_HARD, 1);
+    } else {
+        char reason[1024];
+        strerror_r(errno, reason, 1024);
+        shutdown_proxy(ps, SHUTDOWN_HARD, 1, reason);
     }
 }
 
@@ -1210,27 +1210,27 @@ static void end_handshake(proxystate *ps) {
     ev_io_stop(loop, &ps->ev_r_handshake);
     ev_io_stop(loop, &ps->ev_w_handshake);
 
-    /* Disable renegotiation (CVE-2009-3555) */
+    // Disable renegotiation (CVE-2009-3555)
     if (ps->ssl->s3) {
         ps->ssl->s3->flags |= SSL3_FLAGS_NO_RENEGOTIATE_CIPHERS;
     }
     ps->handshaked = 1;
 
-    // DTrace probe for session reuse
-    if (STUD_SSL_SESSION_REUSE_ENABLED() || STUD_SSL_CIPHER_ENABLED() || !CONFIG->QUIET) {
-        port = get_client_info(ps, host, sizeof(host));
-    }
-    if (STUD_SSL_SESSION_REUSE_ENABLED() || !CONFIG->QUIET) {
-        SSL_SESSION* sess = SSL_get_session(ps->ssl);
-        long expiry = SSL_SESSION_get_time(sess) +
-                      SSL_SESSION_get_timeout(sess) -
-                      (time_t) ev_now(loop);
+    get_client_info(ps, host, sizeof(host), &port);
+    SSL_SESSION* sess = SSL_get_session(ps->ssl);
+    long expiry = SSL_SESSION_get_time(sess) + SSL_SESSION_get_timeout(sess) - (time_t) ev_now(loop);
 
+    if (SSL_session_reused(ps->ssl)) {
+      LOG("op=\"stud session reuse\" client=\"%s:%d\" expiry=\"%ld\"\n", host, port, expiry);
+    } else {
+      LOG("op=\"stud session new\" client=\"%s:%d\" expiry=\"%ld\"\n", host, port, expiry);
+    }
+
+    // DTrace probe
+    if (STUD_SSL_SESSION_REUSE_ENABLED()) {
         if (SSL_session_reused(ps->ssl)) {
-            LOG("op=\"stud session reuse\" client=\"%s:%d\" expiry=\"%ld\"\n", host, port, expiry);
             STUD_SSL_SESSION_REUSE(host, port, expiry);
         } else {
-            LOG("op=\"stud session new\" client=\"%s:%d\" expiry=\"%ld\"\n", host, port, expiry);
             STUD_SSL_SESSION_NEW(host, port, expiry);
         }
     }
@@ -1314,14 +1314,10 @@ static void client_proxy_proxy(struct ev_loop *loop, ev_io *w, int revents) {
     }
 
     if (proxy == end) {
-        LOG("{client} Unexpectedly long PROXY line. Perhaps a malformed request?");
-        shutdown_proxy(ps, SHUTDOWN_SSL, 1);
-    }
-    else if (t == 1) {
+        shutdown_proxy(ps, SHUTDOWN_SSL, 1, (char *)"Unexpectedly long PROXY line. Perhaps a malformed request?");
+    } else if (t == 1) {
         if (ringbuffer_is_full(&ps->ring_ssl2clear)) {
-            LOG("{client} Error writing PROXY line");
-            shutdown_proxy(ps, SHUTDOWN_SSL, 1);
-            return;
+            return shutdown_proxy(ps, SHUTDOWN_SSL, 1, (char *)"Error writing PROXY line");
         }
 
         char *ring = ringbuffer_write_ptr(&ps->ring_ssl2clear);
@@ -1337,8 +1333,7 @@ static void client_proxy_proxy(struct ev_loop *loop, ev_io *w, int revents) {
         }
     }
     else if (!BIO_should_retry(b)) {
-        LOG("{client} Unexpected error reading PROXY line");
-        shutdown_proxy(ps, SHUTDOWN_SSL, 1);
+        shutdown_proxy(ps, SHUTDOWN_SSL, 1, (char *)"Unexpected error reading PROXY line");
     }
 }
 
@@ -1353,41 +1348,41 @@ static void client_handshake(struct ev_loop *loop, ev_io *w, int revents) {
     t = SSL_do_handshake(ps->ssl);
     if (likely(t == 1)) {
         end_handshake(ps);
-    }
-    else {
+    } else {
         int err = SSL_get_error(ps->ssl, t);
         if (err == SSL_ERROR_WANT_READ) {
             ev_io_stop(loop, &ps->ev_w_handshake);
             ev_io_start(loop, &ps->ev_r_handshake);
-        }
-        else if (err == SSL_ERROR_WANT_WRITE) {
+        } else if (err == SSL_ERROR_WANT_WRITE) {
             ev_io_stop(loop, &ps->ev_r_handshake);
             ev_io_start(loop, &ps->ev_w_handshake);
-        }
-        else if (err == SSL_ERROR_ZERO_RETURN) {
-            LOG("{%s} Connection closed (in handshake)\n", w->fd == ps->fd_up ? "client" : "backend");
-            shutdown_proxy(ps, SHUTDOWN_SSL, w->fd == ps->fd_down);
-        }
-        else {
-            LOG("{%s} Unexpected SSL error (in handshake): %d\n", w->fd == ps->fd_up ? "client" : "backend", err);
-            shutdown_proxy(ps, SHUTDOWN_SSL, w->fd == ps->fd_down);
+        } else if (err == SSL_ERROR_ZERO_RETURN) {
+            shutdown_proxy(ps, SHUTDOWN_SSL, w->fd == ps->fd_down, (char *)"Connection closed in handshake");
+        } else {
+            shutdown_proxy(ps, SHUTDOWN_SSL, w->fd == ps->fd_down, (char *)"Unexpected SSL error in handshake");
         }
     }
 }
 
 /* Handle a socket error condition passed to us from OpenSSL */
 static void handle_fatal_ssl_error(proxystate *ps, int err, int backend) {
-    if (err == SSL_ERROR_ZERO_RETURN)
-        L_ERR("{%s} Connection closed (in data)\n", backend ? "backend" : "client");
-    else if (err == SSL_ERROR_SYSCALL)
+    char *reason;
+    char reason2[1024];
+    if (err == SSL_ERROR_ZERO_RETURN) {
+        reason = (char *)"Connection closed (SSL_ERROR_ZERO_RETURN)";
+    } else if (err == SSL_ERROR_SYSCALL) {
         if (errno == 0)
-            L_ERR("{%s} Connection closed (in data)\n", backend ? "backend" : "client");
-        else
-            perror(backend ? "{backend} [errno] " : "{client} [errno] ");
-    else
-        L_ERR("{%s} Unexpected SSL_read error: %d\n", backend ? "backend" : "client" , err);
+            reason = (char *)"Connection closed (SSL_ERROR_SYSCALL)";
+        else {
+            strerror_r(errno, reason2, 1024);
+            reason = reason2;
+        }
+    } else {
+        snprintf(reason2, 1024, "Unexpected SSL_read error: %d", err);
+        reason = reason2;
+    }
 
-    shutdown_proxy(ps, SHUTDOWN_SSL, backend);
+    shutdown_proxy(ps, SHUTDOWN_SSL, backend, reason);
 }
 
 /* Read some data from the upstream secure socket via OpenSSL,
@@ -1412,9 +1407,9 @@ static void ssl_read(struct ev_loop *loop, ev_io *w, int revents) {
         offset+=ret;
     }
 
-    /* Fix CVE-2009-3555. Disable reneg if started by client. */
+    // Fix CVE-2009-3555. Disable reneg if started by client.
     if (ps->renegotiation) {
-        shutdown_proxy(ps, SHUTDOWN_SSL, 0);
+        shutdown_proxy(ps, SHUTDOWN_SSL, 0, (char *)"server rejects client renegotiation request, closing connection");
         return;
     }
 
@@ -1470,10 +1465,6 @@ static void ssl_write(struct ev_loop *loop, ev_io *w, int revents) {
     int t;
     int sz;
     proxystate *ps = (proxystate *)w->data;
-    /*  if(unlikely(ps->ssl==NULL)){
-        //the connection has been closed
-        return;
-    }*/
     ringbuffer_t *ring=&ps->ring_clear2ssl;
     if(unlikely(ringbuffer_is_empty(ring))){
         ev_io_stop(loop, &ps->ev_w_ssl);
@@ -1490,19 +1481,19 @@ static void ssl_write(struct ev_loop *loop, ev_io *w, int revents) {
         }
         if (t == sz) {
             if (ps->want_shutdown) {
-	        shutdown_proxy(ps, SHUTDOWN_HARD, 1);
+                shutdown_proxy(ps, SHUTDOWN_HARD, 1, (char *)"close after write"); // TODO - what causes this?
                 return;
             }
             ev_io_stop(loop, &ps->ev_w_ssl);
         }
-    }else {
+    } else {
         int err = SSL_get_error(ps->ssl, t);
         if (err == SSL_ERROR_WANT_READ) {
             start_handshake(ps, err);
-        }
-        else if (err == SSL_ERROR_WANT_WRITE) {} /* incomplete SSL data */
-        else
+        } else if (err == SSL_ERROR_WANT_WRITE) {} // incomplete SSL data
+        else {
             handle_fatal_ssl_error(ps, err,  w->fd == ps->fd_up ? 0 : 1);
+        }
     }
 }
 
@@ -1525,12 +1516,12 @@ static void handle_accept(struct ev_loop *loop, ev_io *w, int revents) {
             L_ERR("{client} accept() failed; too many open files for this system\n");
             break;
 
-	case ECONNABORTED:
-	  L_ERR("{client} accept() failed; client went away while negotiating TCP with Solaris ECONNABORTED\n");
-	  break;
+    case ECONNABORTED:
+      L_ERR("{client} accept() failed; client went away while negotiating TCP with Solaris ECONNABORTED\n");
+      break;
 
         default:
-	  fprintf(stderr, "server socket accept returned -1, errno is: %d\n", errno);
+      fprintf(stderr, "server socket accept returned -1, errno is: %d\n", errno);
             assert(errno == EINTR || errno == EWOULDBLOCK || errno == EAGAIN);
             break;
         }
@@ -1597,11 +1588,11 @@ static void handle_accept(struct ev_loop *loop, ev_io *w, int revents) {
 
     /* set up events */
     ev_io_init(
-	       &ps->ev_r_ssl,
-	       ssl_read,
-	       client,
-	       EV_READ
-	       );
+           &ps->ev_r_ssl,
+           ssl_read,
+           client,
+           EV_READ
+           );
     ev_io_init(&ps->ev_w_ssl, ssl_write, client, EV_WRITE);
 
     ev_io_init(&ps->ev_r_handshake, client_handshake, client, EV_READ);
@@ -1750,7 +1741,7 @@ static void handle_clear_accept(struct ev_loop *loop, ev_io *w, int revents) {
 /* Set up the child (worker) process including libev event loop, read event
  * on the bound socket, etc */
 static void handle_connections() {
-    LOG("{core} Process %d online\n", child_num);
+    LOG("op=process_online child_num=%d\n", child_num);
 
     /* child cannot create new children... */
     create_workers = 0;
@@ -2027,11 +2018,16 @@ void openssl_check_version() {
             (unsigned long int) OPENSSL_VERSION_NUMBER,
             (unsigned long int) openssl_version
         );
-        /* now what? exit now? */
-        /* exit(1); */
+    // might want to exit now, but then again, maybe everything is just fine
     }
 
-    LOG("{core} Using OpenSSL version %lx.\n", (unsigned long int) openssl_version);
+    LOG("op=init ssl_version=\"%s\" %s %s %s %s\n",
+    SSLeay_version(SSLEAY_VERSION),
+    SSLeay_version(SSLEAY_BUILT_ON),
+    SSLeay_version(SSLEAY_PLATFORM),
+    SSLeay_version(SSLEAY_DIR),
+    SSLeay_version(SSLEAY_CFLAGS)
+    );
 }
 
 /* Process command line args, create the bound socket,
