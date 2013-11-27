@@ -976,8 +976,10 @@ static void shutdown_proxy(proxystate *ps, SHUTDOWN_REQUESTOR req, int backend, 
         get_client_info(ps, host, sizeof(host), &port);
         LOG("op=\"connection closed\" client=%s:%d direction=%s reason=\"%s\"\n", 
             host, port, backend ? "backend" : "client", reason);
+#ifdef STUD_DTRACE
         if (STUD_CLOSE_SIDE_ENABLED() || !CONFIG->QUIET)
             STUD_CLOSE_SIDE(host, port, backend);
+#endif
     } else {
         ps->want_shutdown = 1;
     }
