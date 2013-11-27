@@ -97,7 +97,11 @@ class SimpleMemoryPool{
         COUNT_TYPE i=Top - 1 - FreeTheshold;
         for(; i < end; i++){
             ptr = Start + (Stack[i] * ElementSize);
+#ifdef __linux__
+            madvise(ptr,ElementSize,MADV_DONTNEED);
+#else
             madvise(ptr,ElementSize,MADV_FREE);
+#endif
         }
         if(likely(UnFreed > (FreeTheshold/2))){
             UnFreed -= (FreeTheshold/2);
