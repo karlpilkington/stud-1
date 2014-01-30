@@ -49,7 +49,7 @@ class SimpleMemoryPool{
            ElementSize=(ELEMENT_SIZE+(PAGE_SIZE-1))& (~(PAGE_SIZE-1));
        }
        size_t size=ElementSize*MAX_ELEMENTS;
-       Start=(char *)mmap(NULL,size,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANON,-1,0);
+       Start=(char *)mmap(NULL,size,PROT_READ|PROT_WRITE,MAP_PRIVATE|MAP_ANON|MAP_NORESERVE,-1,0);
        if(unlikely(Start==MAP_FAILED)){
            perror("mmap failed");
            exit(1);
