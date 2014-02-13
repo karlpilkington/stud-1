@@ -67,7 +67,7 @@ realall: $(ALL)
 
 stud.o: stud.cc SimpleMemoryPool.hpp
 
-stud: $(OBJS) SimpleMemoryPool.hpp
+stud: $(OBJS)
 	$(CXX)  $(CPPFLAGS) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
 
 deps/libev/.libs/libev.a: deps/libev/Makefile
