@@ -1527,14 +1527,17 @@ static void ssl_write(struct ev_loop *loop, ev_io *w, int revents) {
 }
 
 #ifdef OPENSSL_NPN_NEGOTIATED
-static const char ssl_npn_line[] = 
-"\x06spdy/3" \
-"\x08http/1.1" \
-"\x08http/1.0";
-
-static int ssl_advertise_spdy(SSL* ssl, const unsigned char** data, unsigned int *len, void* arg) {
-    *data = (const unsigned char*) ssl_npn_line;
-    *len = strlen(ssl_npn_line);
+static int ssl_advertise_spdy(SSL* ssl,
+                              const unsigned char** data,
+                              unsigned int *len,
+                              void* arg) {
+    if (CONFIG->NPN_RAW == NULL) {
+      *data = reinterpret_cast<const unsigned char*>("");
+      *len = 0;
+    } else {
+      *data = CONFIG->NPN_RAW;
+      *len = static_cast<unsigned int>(CONFIG->NPN_RAW_LEN);
+    }
     return SSL_TLSEXT_ERR_OK;
 }
 #endif
