@@ -1526,6 +1526,22 @@ static void ssl_write(struct ev_loop *loop, ev_io *w, int revents) {
     }
 }
 
+#ifdef OPENSSL_NPN_NEGOTIATED
+static int ssl_advertise_spdy(SSL* ssl,
+                              const unsigned char** data,
+                              unsigned int *len,
+                              void* arg) {
+    if (CONFIG->NPN_RAW == NULL) {
+      *data = reinterpret_cast<const unsigned char*>("");
+      *len = 0;
+    } else {
+      *data = CONFIG->NPN_RAW;
+      *len = static_cast<unsigned int>(CONFIG->NPN_RAW_LEN);
+    }
+    return SSL_TLSEXT_ERR_OK;
+}
+#endif
+
 /* libev read handler for the bound socket.  Socket is accepted,
  * the proxystate is allocated and initalized, and we're off the races
  * connecting to the backend */
@@ -1591,6 +1607,11 @@ static void handle_accept(struct ev_loop *loop, ev_io *w, int revents) {
     SSL_set_mode(ssl, mode);
     SSL_set_accept_state(ssl);
     SSL_set_fd(ssl, client);
+
+#ifdef OPENSSL_NPN_NEGOTIATED
+    // Advertise SPDY support
+    SSL_CTX_set_next_protos_advertised_cb(ctx, ssl_advertise_spdy, NULL);
+#endif
 
     //proxystate *ps = (proxystate *)malloc(sizeof(proxystate));
     proxystate *ps = SPool.Get();

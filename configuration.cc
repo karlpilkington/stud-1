@@ -53,6 +53,7 @@
 // BEGIN: configuration parameters
 #define CFG_CIPHERS "ciphers"
 #define CFG_SSL_ENGINE "ssl-engine"
+#define CFG_SSL_NPN "npn"
 #define CFG_PREFER_SERVER_CIPHERS "prefer-server-ciphers"
 #define CFG_EC_CURVE "ec-curve"
 #define CFG_BACKEND "backend"
@@ -153,6 +154,9 @@ stud_config * config_new (void) {
   r->CIPHER_SUITE       = NULL;
   r->ENGINE             = NULL;
   r->EC_CURVE           = NULL;
+  r->NPN                = NULL;
+  r->NPN_RAW            = NULL;
+  r->NPN_RAW_LEN        = 0;
   r->BACKLOG            = 100;
 
 #ifdef USE_SHARED_CACHE
@@ -198,6 +202,8 @@ void config_destroy (stud_config *cfg) {
   if (cfg->CIPHER_SUITE != NULL) free(cfg->CIPHER_SUITE);
   if (cfg->ENGINE != NULL) free(cfg->ENGINE);
   if (cfg->EC_CURVE != NULL) free(cfg->EC_CURVE);
+  if (cfg->NPN != NULL) free(cfg->NPN);
+  if (cfg->NPN_RAW != NULL) free(cfg->NPN_RAW);
 
 #ifdef USE_SHARED_CACHE
   if (cfg->SHCUPD_IP != NULL) free(cfg->SHCUPD_IP);
@@ -307,6 +313,29 @@ char * str_trim(char *str) {
   ptr = str_rtrim(str);
   str = str_ltrim(ptr);
   return str;
+}
+
+unsigned char * config_split_npn (char *src, int *out_len) {
+  if (src == NULL)
+    return NULL;
+
+  int len = strlen(src) + 1;
+  unsigned char *out = reinterpret_cast<unsigned char*>(malloc(len));
+  if (out == NULL)
+    return NULL;
+
+  /* Shift everything one byte right and replace commas with sizes */
+  memcpy(out + 1, src, len);
+  int off = 0;
+  for (int i = 1; i <= len; i++) {
+    if (i != len && out[i] != ',')
+      continue;
+    out[off] = i - off - 1;
+    off = i;
+  }
+
+  *out_len = len;
+  return out;
 }
 
 char * config_assign_str (char **dst, char *v) {
@@ -583,6 +612,12 @@ void config_param_validate (const char *k, char *v, stud_config *cfg, char *file
   else if (strcmp(k, CFG_EC_CURVE) == 0) {
     if (v != NULL && strlen(v) > 0) {
       config_assign_str(&cfg->EC_CURVE, v);
+    }
+  }
+  else if (strcmp(k, CFG_SSL_NPN) == 0) {
+    if (v != NULL && strlen(v) > 0) {
+      config_assign_str(&cfg->NPN, v);
+      cfg->NPN_RAW = config_split_npn(cfg->NPN, &cfg->NPN_RAW_LEN);
     }
   }
   else if (strcmp(k, CFG_PREFER_SERVER_CIPHERS) == 0) {
@@ -1027,6 +1062,12 @@ void config_print_default (FILE *fd, stud_config *cfg) {
   fprintf(fd, FMT_QSTR, CFG_SSL_ENGINE, config_disp_str(cfg->ENGINE));
   fprintf(fd, "\n");
 
+  fprintf(fd, "# Use specified SSL engine\n");
+  fprintf(fd, "#\n");
+  fprintf(fd, "# type: string\n");
+  fprintf(fd, FMT_QSTR, CFG_SSL_NPN, config_disp_str(cfg->NPN));
+  fprintf(fd, "\n");
+
   fprintf(fd, "# Number of worker processes\n");
   fprintf(fd, "#\n");
   fprintf(fd, "# type: integer\n");
@@ -1241,7 +1282,7 @@ void config_parse_cli(int argc, char **argv, stud_config *cfg) {
         break;
       case 'e':
         config_param_validate(CFG_SSL_ENGINE, optarg, cfg, NULL, 0);
-         break;
+        break;
       case 'O':
         config_param_validate(CFG_PREFER_SERVER_CIPHERS, CFG_BOOL_ON, cfg, NULL, 0);
         break;
