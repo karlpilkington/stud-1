@@ -54,6 +54,7 @@
 #define CFG_CIPHERS "ciphers"
 #define CFG_SSL_ENGINE "ssl-engine"
 #define CFG_PREFER_SERVER_CIPHERS "prefer-server-ciphers"
+#define CFG_EC_CURVE "ec-curve"
 #define CFG_BACKEND "backend"
 #define CFG_FRONTEND "frontend"
 #define CFG_WORKERS "workers"
@@ -151,6 +152,7 @@ stud_config * config_new (void) {
   r->CERT_FILES         = NULL;
   r->CIPHER_SUITE       = NULL;
   r->ENGINE             = NULL;
+  r->EC_CURVE           = NULL;
   r->BACKLOG            = 100;
 
 #ifdef USE_SHARED_CACHE
@@ -195,6 +197,7 @@ void config_destroy (stud_config *cfg) {
   }
   if (cfg->CIPHER_SUITE != NULL) free(cfg->CIPHER_SUITE);
   if (cfg->ENGINE != NULL) free(cfg->ENGINE);
+  if (cfg->EC_CURVE != NULL) free(cfg->EC_CURVE);
 
 #ifdef USE_SHARED_CACHE
   if (cfg->SHCUPD_IP != NULL) free(cfg->SHCUPD_IP);
@@ -575,6 +578,11 @@ void config_param_validate (const char *k, char *v, stud_config *cfg, char *file
   else if (strcmp(k, CFG_SSL_ENGINE) == 0) {
     if (v != NULL && strlen(v) > 0) {
       config_assign_str(&cfg->ENGINE, v);
+    }
+  }
+  else if (strcmp(k, CFG_EC_CURVE) == 0) {
+    if (v != NULL && strlen(v) > 0) {
+      config_assign_str(&cfg->EC_CURVE, v);
     }
   }
   else if (strcmp(k, CFG_PREFER_SERVER_CIPHERS) == 0) {
@@ -999,6 +1007,12 @@ void config_print_default (FILE *fd, stud_config *cfg) {
   fprintf(fd, "# Run openssl ciphers for list of available ciphers.\n");
   fprintf(fd, "# type: string\n");
   fprintf(fd, FMT_QSTR, CFG_CIPHERS, config_disp_str(cfg->CIPHER_SUITE));
+  fprintf(fd, "\n");
+
+  fprintf(fd, "# EC curve to use in ECDH and other ciphers.\n");
+  fprintf(fd, "#\n");
+  fprintf(fd, "# type: string\n");
+  fprintf(fd, FMT_QSTR, CFG_EC_CURVE, config_disp_str(cfg->EC_CURVE));
   fprintf(fd, "\n");
 
   fprintf(fd, "# Enforce server cipher list order\n");

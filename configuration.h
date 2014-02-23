@@ -54,6 +54,7 @@ struct __stud_config {
     struct cert_files *CERT_FILES;
     char *CIPHER_SUITE;
     char *ENGINE;
+    char *EC_CURVE;
     int BACKLOG;
 #ifdef USE_SHARED_CACHE
     int SHARED_CACHE;

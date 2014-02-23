@@ -668,6 +668,26 @@ SSL_CTX *make_ctx(const char *pemfile) {
         SSL_CTX_set_options(ctx, SSL_OP_CIPHER_SERVER_PREFERENCE);
     }
 
+    if (CONFIG->EC_CURVE != NULL) {
+      int ecdh_nid;
+
+      ecdh_nid = OBJ_sn2nid(CONFIG->EC_CURVE);
+      if (ecdh_nid == NID_undef) {
+        fprintf(stderr, "EC curve id '%s' not found\n", CONFIG->EC_CURVE);
+      } else {
+        EC_KEY* ecdh;
+
+        ecdh = EC_KEY_new_by_curve_name(ecdh_nid);
+        if (ecdh == NULL) {
+          fprintf(stderr, "EC curve '%s' not found\n", CONFIG->EC_CURVE);
+        } else {
+          SSL_CTX_set_options(ctx, SSL_OP_SINGLE_ECDH_USE);
+          SSL_CTX_set_tmp_ecdh(ctx, ecdh);
+          EC_KEY_free(ecdh);
+        }
+      }
+    }
+
     if (CONFIG->PMODE == SSL_CLIENT) {
         return ctx;
     }
