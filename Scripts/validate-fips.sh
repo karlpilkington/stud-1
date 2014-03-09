@@ -68,7 +68,7 @@ fi
 done
 
 if [ "$SupportedNonFIPSCiphers" == "" ] ; then
-    printf "$SERVER_PORT is FIPS Validated!  \n\n"
+    printf "SUCCESS! $SERVER_PORT is FIPS Validated!  \n\n"
     printf "Tested Ciphers: $ciphers \n\n"
     printf  "FIPS Compliant Ciphers Supported: $SupportedFIPSCiphers\n\n"
     printf  "FIPS Compliant Ciphers Supported Details: \n\n"
@@ -77,11 +77,13 @@ if [ "$SupportedNonFIPSCiphers" == "" ] ; then
         printf "$fipsdetails" | grep -w ^"$i"
     done
     printf "\n\n"
+    exit 0;
 else
-    printf "$SERVER_PORT FIPS Failure -- Non FIPS compliant Ciphers found"
+    printf "FAILURE! $SERVER_PORT has  non FIPS compliant Ciphers"
     printf "Tested Ciphers: $ciphers\n"
     printf  "Non FIPS Compliant Ciphers Supported: " $SupportedNonFIPSCiphers
     printf  "FIPS Compliant Ciphers Supported: " $SupportedFIPSCiphers
     printf  "All Supported Ciphers: " $SupportedCiphers
+    exit 1;
 fi
 
