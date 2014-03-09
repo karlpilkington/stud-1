@@ -67,6 +67,7 @@ char *inet_ntoa_r(const struct in_addr in, char *buffer, socklen_t buflen);
 #include <openssl/err.h>
 #include <openssl/engine.h>
 #include <openssl/asn1.h>
+#include <openssl/crypto.h>
 #include <ev.h>
 
 #ifdef STUD_DTRACE
@@ -2083,6 +2084,12 @@ void openssl_check_version() {
 /* Process command line args, create the bound socket,
  * spawn child (worker) processes, and respawn if any die */
 int main(int argc, char **argv) {
+    if (!FIPS_mode_set(1)) {
+        int err = ERR_get_error();
+        fprintf(stdout, "openssl fips failed: %s\n", ERR_error_string(err, NULL));
+        fail("FIPS failed");
+    }
+
     // initialize configuration
     CONFIG = config_new();
 

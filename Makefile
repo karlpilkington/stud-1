@@ -9,8 +9,11 @@ MANDIR  = $(PREFIX)/share/man
 PLATFORM = $(shell sh -c 'uname -s | tr "[A-Z]" "[a-z]"')
 
 LDFLAGS = -g -lm -m64
-CC = gcc
-CXX = g++
+#FIPSDIR ?= /repos/openssl-fips-2.0/out
+TOP := $(shell pwd)
+FIPSDIR ?= $(TOP)/deps/openssl-fips-2.0.5/out
+CC = $(FIPSDIR)/bin/fipsld
+CXX = $(FIPSDIR)/bin/fipsld
 CPPFLAGS = -O2 -m64 -Ideps/libev -g -march=native -DNDEBUG -Wall
 CXXFLAGS = -std=c++0x -fpermissive 
 OBJS = stud.o configuration.o deps/libev/.libs/libev.a
@@ -88,7 +91,8 @@ OPENSSL_PLATFORM = linux-x86_64
 endif
 
 deps/openssl/libcrypto.a:
-	cd deps/openssl && ./Configure no-idea no-mdc2 no-rc5 enable-tlsext $(OPENSSL_PLATFORM)
+	cd deps/openssl && ./Configure no-idea no-mdc2 no-rc5 fips enable-tlsext \
+			--with-fipsdir=$(FIPSDIR) $(OPENSSL_PLATFORM)
 	-$(MAKE) $(MAKEFLAGS) -C deps/openssl depend
 	-$(MAKE) $(MAKEFLAGS) -C deps/openssl
 
