@@ -8,15 +8,22 @@ BINDIR  = $(PREFIX)/bin
 MANDIR  = $(PREFIX)/share/man
 PLATFORM = $(shell sh -c 'uname -s | tr "[A-Z]" "[a-z]"')
 
-LDFLAGS = -g -lm -m64
-#FIPSDIR ?= /repos/openssl-fips-2.0/out
-TOP := $(shell pwd)
-FIPSDIR ?= $(TOP)/deps/openssl-fips-2.0.5/out
-CC = $(FIPSDIR)/bin/fipsld
-CXX = $(FIPSDIR)/bin/fipsld
 CPPFLAGS = -O2 -m64 -Ideps/libev -g -march=native -DNDEBUG -Wall
 CXXFLAGS = -std=c++0x -fpermissive 
 OBJS = stud.o configuration.o deps/libev/.libs/libev.a
+LDFLAGS = -g -lm -m64
+STUD_ROOT_DIR := $(shell pwd)
+
+ifeq ($(STUD_FIPS_MODE),1)
+	FIPSDIR ?= $(STUD_ROOT_DIR)/deps/fips-build
+	FIPSLIBDIR ?= $(FIPSDIR)/lib
+	CC = $(FIPSDIR)/bin/fipsld
+	CXX = $(FIPSDIR)/bin/fipsld
+	CPPFLAGS += -DSTUD_FIPS_MODE=1
+else
+	CC ?= gcc
+	CXX ?= g++
+endif
 
 DTRACE=/usr/sbin/dtrace
 all: realall
@@ -91,10 +98,20 @@ OPENSSL_PLATFORM = linux-x86_64
 endif
 
 deps/openssl/libcrypto.a:
+ifeq ($(STUD_FIPS_MODE),1)
+	cd deps && tar -xzf openssl-fips-2.0.5.tar.gz \
+		&& cd openssl-fips-2.0.5/ \
+		&& ./config fipscanisterbuild --prefix=$(FIPSDIR)\
+		&& make && make install \
+		&& cp $(STUD_ROOT_DIR)/deps/backup/fipsld $(FIPSDIR)/bin
 	cd deps/openssl && ./Configure no-idea no-mdc2 no-rc5 fips enable-tlsext \
 			--with-fipsdir=$(FIPSDIR) $(OPENSSL_PLATFORM)
+else
+	cd deps/openssl && ./Configure no-idea no-mdc2 no-rc5 enable-tlsext $(OPENSSL_PLATFORM)
+endif
 	-$(MAKE) $(MAKEFLAGS) -C deps/openssl depend
 	-$(MAKE) $(MAKEFLAGS) -C deps/openssl
+
 
 install: $(ALL)
 	install -d $(DESTDIR)$(BINDIR)
@@ -106,6 +123,7 @@ clean:
 	rm -f stud $(OBJS) stud_provider.h
 	make -C deps/openssl clean
 	make -C deps/libev clean
+	rm -rfd deps/openssl-fips-2.0.5/
 
 
 .PHONY: all realall
