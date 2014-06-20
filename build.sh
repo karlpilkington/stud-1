@@ -18,11 +18,20 @@ if [[ $arch != x64 ]]; then
 	exit 1
 fi
 
-git submodule update --init --recursive
-make -j4 || exit 1
+echo '> running make clean'
+make clean > /dev/null
 
+echo '> pulling git submodules'
+git submodule update --init --recursive
+
+echo '> running make'
+make > /dev/null || exit 1
+
+echo "> copying files to $out"
 mkdir -p "$out/bin"
 mv stud "$out/bin" || exit 1
 
-echo "stud built in $SECONDS seconds, saved to $out"
+echo "> stud built in $SECONDS seconds, saved to $out"
+echo
+
 sha256sum "$out/bin/stud"
