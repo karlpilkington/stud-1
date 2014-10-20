@@ -18,14 +18,25 @@ if [[ $arch != x64 ]]; then
 	exit 1
 fi
 
+case "$(uname)" in
+	FreeBSD)
+		checksum=sha256
+		make=gmake
+		;;
+	*)
+		checksum=sha256sum
+		make=make
+		;;
+esac
+
 echo '> running make clean'
-make clean > /dev/null
+$make clean > /dev/null
 
 echo '> pulling git submodules'
 git submodule update --init --recursive
 
 echo '> running make'
-make > /dev/null || exit 1
+$make > /dev/null || exit 1
 
 echo "> copying files to $out"
 mkdir -p "$out/bin"
@@ -34,4 +45,4 @@ mv stud "$out/bin" || exit 1
 echo "> stud built in $SECONDS seconds, saved to $out"
 echo
 
-sha256sum "$out/bin/stud"
+$checksum "$out/bin/stud"

@@ -68,6 +68,7 @@ stud_provider.o: stud.o stud_provider.d
 	$(DTRACE) -64 -G -xnolibs -s stud_provider.d -o $@ stud.o
 
 ALL += stud_provider.h
+ifeq ($(PLATFORM),freebsd)
 else
 LDFLAGS += -ldl
 endif
@@ -93,6 +94,8 @@ ifeq ($(PLATFORM),darwin)
 OPENSSL_PLATFORM = darwin64-x86_64-cc
 else ifeq ($(PLATFORM),sunos)
 OPENSSL_PLATFORM = solaris64-x86_64-gcc
+else ifeq ($(PLATFORM),freebsd)
+OPENSSL_PLATFORM = BSD-x86_64
 else
 OPENSSL_PLATFORM = linux-x86_64
 endif
