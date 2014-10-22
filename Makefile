@@ -68,9 +68,7 @@ stud_provider.o: stud.o stud_provider.d
 	$(DTRACE) -64 -G -xnolibs -s stud_provider.d -o $@ stud.o
 
 ALL += stud_provider.h
-endif
-
-ifeq ($(PLATFORM),freebsd)
+else ifeq ($(PLATFORM),freebsd)
 else
 LDFLAGS += -ldl
 endif
