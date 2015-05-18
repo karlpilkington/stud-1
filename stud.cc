@@ -1256,6 +1256,22 @@ static void end_handshake(proxystate *ps) {
       LOG("op=\"stud session new\" client=\"%s:%d\" expiry=\"%ld\"\n", host, port, expiry);
     }
 
+    {
+        int back = create_back_socket();
+
+        if (back == -1) {
+            //close(client);
+            perror("{backend-socket}");
+            return;
+        } 
+
+
+        ev_io_init(&ps->ev_w_connect, handle_connect, back, EV_WRITE);
+
+        ev_io_init(&ps->ev_w_clear, clear_write, back, EV_WRITE);
+        ev_io_init(&ps->ev_r_clear, clear_read, back, EV_READ); 
+    }
+
     // DTrace probe
     if (STUD_SSL_SESSION_REUSE_ENABLED()) {
         if (SSL_session_reused(ps->ssl)) {
@@ -1591,13 +1607,13 @@ static void handle_accept(struct ev_loop *loop, ev_io *w, int revents) {
     setnonblocking(client);
     settcpkeepalive(client);
 
-    int back = create_back_socket();
+    /*   int back = create_back_socket();
 
     if (back == -1) {
         close(client);
         perror("{backend-socket}");
         return;
-    }
+    } */
 
     SSL_CTX * ctx = (SSL_CTX *)w->data;
     SSL *ssl = SSL_new(ctx);
@@ -1619,7 +1635,7 @@ static void handle_accept(struct ev_loop *loop, ev_io *w, int revents) {
     if(unlikely(ps==NULL)){
         fprintf(stderr,"Ran out of memory in the memory pool -- recompile with a larger memory pool");
         close(client);
-        close(back);
+        //close(back);
         SSL_set_shutdown(ps->ssl, SSL_SENT_SHUTDOWN);
         SSL_free(ps->ssl);
         ERR_clear_error();
@@ -1627,7 +1643,8 @@ static void handle_accept(struct ev_loop *loop, ev_io *w, int revents) {
     }
 
     ps->fd_up = client;
-    ps->fd_down = back;
+    //ps->fd_down = back;
+    ps->fd_down = -1;
     ps->ssl = ssl;
     ps->want_shutdown = 0;
     ps->clear_connected = 0;
@@ -1651,10 +1668,10 @@ static void handle_accept(struct ev_loop *loop, ev_io *w, int revents) {
 
     ev_io_init(&ps->ev_proxy, client_proxy_proxy, client, EV_READ);
 
-    ev_io_init(&ps->ev_w_connect, handle_connect, back, EV_WRITE);
+    /*  ev_io_init(&ps->ev_w_connect, handle_connect, back, EV_WRITE);
 
     ev_io_init(&ps->ev_w_clear, clear_write, back, EV_WRITE);
-    ev_io_init(&ps->ev_r_clear, clear_read, back, EV_READ);
+    ev_io_init(&ps->ev_r_clear, clear_read, back, EV_READ); */
 
     ps->ev_r_ssl.data = ps;
     ps->ev_w_ssl.data = ps;
