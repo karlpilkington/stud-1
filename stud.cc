@@ -1262,6 +1262,7 @@ static void end_handshake(proxystate *ps) {
         if (back == -1) {
             //close(client);
             perror("{backend-socket}");
+            abort();
             return;
         } 
 
