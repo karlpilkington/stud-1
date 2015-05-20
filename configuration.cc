@@ -55,6 +55,10 @@
 #define CFG_SSL_ENGINE "ssl-engine"
 #define CFG_SSL_NPN "npn"
 #define CFG_PREFER_SERVER_CIPHERS "prefer-server-ciphers"
+#define CFG_RATE_SWEEP_INTERVAL "rate-sweep-interval"
+#define CFG_RATE_BACKOFF_TIMEOUT "rate-backoff-timeout"
+#define CFG_RATE_COUNTER_RESET_TIMEOUT "rate-counter-reset-timeout"
+#define CFG_RATE_COUNTER_TRIGGER "rate-counter-trigger"
 #define CFG_EC_CURVE "ec-curve"
 #define CFG_BACKEND "backend"
 #define CFG_FRONTEND "frontend"
@@ -177,6 +181,10 @@ stud_config * config_new (void) {
   r->TCP_KEEPALIVE_TIME = 3600;
   r->DAEMONIZE          = 0;
   r->PREFER_SERVER_CIPHERS = 0;
+  r->RATE_SWEEP_INTERVAL = 600;
+  r->RATE_BACKOFF_TIMEOUT = 15;
+  r->RATE_COUNTER_RESET_TIMEOUT = 60;
+  r->RATE_COUNTER_TRIGGER = 30;
 
   return r;
 }
@@ -623,6 +631,18 @@ void config_param_validate (const char *k, char *v, stud_config *cfg, char *file
   else if (strcmp(k, CFG_PREFER_SERVER_CIPHERS) == 0) {
     r = config_param_val_bool(v, &cfg->PREFER_SERVER_CIPHERS);
   }
+  else if (strcmp(k, CFG_RATE_SWEEP_INTERVAL) == 0) {
+    r = config_param_val_int(v, &cfg->RATE_SWEEP_INTERVAL);
+  }
+  else if (strcmp(k, CFG_RATE_BACKOFF_TIMEOUT) == 0) {
+    r = config_param_val_int(v, &cfg->RATE_BACKOFF_TIMEOUT);
+  }
+  else if (strcmp(k, CFG_RATE_COUNTER_RESET_TIMEOUT) == 0) {
+    r = config_param_val_int(v, &cfg->RATE_COUNTER_RESET_TIMEOUT);
+  }
+  else if (strcmp(k, CFG_RATE_COUNTER_TRIGGER) == 0) {
+    r = config_param_val_int(v, &cfg->RATE_COUNTER_TRIGGER);
+  }
   else if (strcmp(k, CFG_FRONTEND) == 0) {
     r = config_param_host_port_wildcard(v, &cfg->FRONT_IP, &cfg->FRONT_PORT, 1);
   }
@@ -1055,6 +1075,34 @@ void config_print_default (FILE *fd, stud_config *cfg) {
   fprintf(fd, "# type: boolean\n");
   fprintf(fd, FMT_STR, CFG_PREFER_SERVER_CIPHERS, config_disp_bool(cfg->PREFER_SERVER_CIPHERS));
   fprintf(fd, "\n");
+
+  fprintf(fd, "### Rate limiting\n");
+
+  fprintf(fd, "# Interval between limiter hashmap sweeps\n");
+  fprintf(fd, "#\n");
+  fprintf(fd, "# type: integer\n");
+  fprintf(fd, FMT_ISTR, CFG_RATE_SWEEP_INTERVAL, cfg->RATE_SWEEP_INTERVAL);
+  fprintf(fd, "\n");
+
+  fprintf(fd, "# Delay time when the rate limiting is triggered\n");
+  fprintf(fd, "#\n");
+  fprintf(fd, "# type: integer\n");
+  fprintf(fd, FMT_ISTR, CFG_RATE_BACKOFF_TIMEOUT, cfg->RATE_BACKOFF_TIMEOUT);
+  fprintf(fd, "\n");
+
+  fprintf(fd, "# Time to reset the counter for a single host\n");
+  fprintf(fd, "#\n");
+  fprintf(fd, "# type: integer\n");
+  fprintf(fd, FMT_ISTR, CFG_RATE_COUNTER_RESET_TIMEOUT, cfg->RATE_COUNTER_RESET_TIMEOUT);
+  fprintf(fd, "\n");
+
+  fprintf(fd, "# Trigger counter value for a single host\n");
+  fprintf(fd, "#\n");
+  fprintf(fd, "# type: integer\n");
+  fprintf(fd, FMT_ISTR, CFG_RATE_COUNTER_TRIGGER, cfg->RATE_COUNTER_TRIGGER);
+  fprintf(fd, "\n");
+
+  fprintf(fd, "### Rate limitingi end\n");
 
   fprintf(fd, "# Use specified SSL engine\n");
   fprintf(fd, "#\n");

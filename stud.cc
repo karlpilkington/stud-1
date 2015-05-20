@@ -82,6 +82,7 @@ char *inet_ntoa_r(const struct in_addr in, char *buffer, socklen_t buflen);
 #include "shctx.h"
 #include "configuration.h"
 #include "SimpleMemoryPool.hpp"
+#include "rate-limiter.hpp"
 
 #ifndef MSG_NOSIGNAL
 # define MSG_NOSIGNAL 0
@@ -111,6 +112,7 @@ static int child_num;
 static pid_t *child_pids;
 static SSL_CTX *default_ctx;
 static SSL_SESSION *client_session;
+RateLimiter* limiter;
 
 #ifdef USE_SHARED_CACHE
 static ev_io shcupd_listener;
@@ -180,6 +182,9 @@ typedef struct proxystate {
     int handshaked:1;                   /* Initial handshake happened */
     int clear_connected:1;              /* Clear stream is connected  */
     int renegotiation:1;                /* Renegotation is occuring */
+
+    /* Rate limiting info */
+    int empty:1;                        /* No data was written to backend yet */
 
     SSL *ssl;                           /* OpenSSL SSL state */
 
@@ -977,6 +982,9 @@ static void shutdown_proxy(proxystate *ps, SHUTDOWN_REQUESTOR req, int backend, 
         ev_io_stop(loop, &ps->ev_w_clear);
         ev_io_stop(loop, &ps->ev_r_clear);
         ev_io_stop(loop, &ps->ev_proxy);
+
+        if (ps->empty)
+          limiter->Count(&ps->remote_ip);
         
         close(ps->fd_up);
         close(ps->fd_down);
@@ -1443,6 +1451,9 @@ static void ssl_read(struct ev_loop *loop, ev_io *w, int revents) {
         return;
     }
 
+    if (offset != 0 && ps->empty == 1)
+      ps->empty = 0;
+
     bool need_append=true;
     if(likely(ps->clear_connected  && (offset > 0))){
         if(unlikely(prev_len > 0)){
@@ -1543,53 +1554,62 @@ static int ssl_advertise_spdy(SSL* ssl,
 }
 #endif
 
+
+static void rate_limit_accept(struct ev_loop *loop, ev_io *w, int revents) {
+  (void) revents;
+  (void) loop;
+
+  struct sockaddr_storage addr;
+  socklen_t sl = sizeof(addr);
+  int client = accept(w->fd, (struct sockaddr *) &addr, &sl);
+  if (client == -1) {
+      switch (errno) {
+      case EMFILE:
+          L_ERR("{client} accept() failed; too many open files for this process\n");
+          break;
+
+      case ENFILE:
+          L_ERR("{client} accept() failed; too many open files for this system\n");
+          break;
+
+  case ECONNABORTED:
+    L_ERR("{client} accept() failed; client went away while negotiating TCP with Solaris ECONNABORTED\n");
+    break;
+
+      default:
+    fprintf(stderr, "server socket accept returned -1, errno is: %d\n", errno);
+          assert(errno == EINTR || errno == EWOULDBLOCK || errno == EAGAIN);
+          break;
+      }
+      return;
+  }
+
+  int flag = 1;
+  int ret ;
+  ret=setsockopt(client, IPPROTO_TCP, TCP_NODELAY, (char *)&flag, sizeof(flag) );
+  if (ret == -1) {
+    perror("Couldn't setsockopt on client (TCP_NODELAY)\n");
+  }
+#ifdef TCP_CWND
+  int cwnd = 10;
+  ret = setsockopt(client, IPPROTO_TCP, TCP_CWND, &cwnd, sizeof(cwnd));
+  if (ret == -1) {
+    perror("Couldn't setsockopt on client (TCP_CWND)\n");
+  }
+#endif
+
+  setnonblocking(client);
+  settcpkeepalive(client);
+
+  limiter->Delay(w, client, &addr);
+}
+
 /* libev read handler for the bound socket.  Socket is accepted,
  * the proxystate is allocated and initalized, and we're off the races
  * connecting to the backend */
-static void handle_accept(struct ev_loop *loop, ev_io *w, int revents) {
-    (void) revents;
-    (void) loop;
-    struct sockaddr_storage addr;
-    socklen_t sl = sizeof(addr);
-    int client = accept(w->fd, (struct sockaddr *) &addr, &sl);
-    if (client == -1) {
-        switch (errno) {
-        case EMFILE:
-            L_ERR("{client} accept() failed; too many open files for this process\n");
-            break;
-
-        case ENFILE:
-            L_ERR("{client} accept() failed; too many open files for this system\n");
-            break;
-
-    case ECONNABORTED:
-      L_ERR("{client} accept() failed; client went away while negotiating TCP with Solaris ECONNABORTED\n");
-      break;
-
-        default:
-      fprintf(stderr, "server socket accept returned -1, errno is: %d\n", errno);
-            assert(errno == EINTR || errno == EWOULDBLOCK || errno == EAGAIN);
-            break;
-        }
-        return;
-    }
-
-    int flag = 1;
-    int ret ;
-    ret=setsockopt(client, IPPROTO_TCP, TCP_NODELAY, (char *)&flag, sizeof(flag) );
-    if (ret == -1) {
-      perror("Couldn't setsockopt on client (TCP_NODELAY)\n");
-    }
-#ifdef TCP_CWND
-    int cwnd = 10;
-    ret = setsockopt(client, IPPROTO_TCP, TCP_CWND, &cwnd, sizeof(cwnd));
-    if (ret == -1) {
-      perror("Couldn't setsockopt on client (TCP_CWND)\n");
-    }
-#endif
-
-    setnonblocking(client);
-    settcpkeepalive(client);
+static void handle_accept(RateLimiter::Socket* s) {
+    ev_io* w = s->w;
+    int client = s->fd;
 
     int back = create_back_socket();
 
@@ -1633,7 +1653,8 @@ static void handle_accept(struct ev_loop *loop, ev_io *w, int revents) {
     ps->clear_connected = 0;
     ps->handshaked = 0;
     ps->renegotiation = 0;
-    ps->remote_ip = addr;
+    ps->empty = 1;
+    ps->remote_ip = s->addr;
     ringbuffer_init(&ps->ring_ssl2clear,ps->buf);
     ringbuffer_init(&ps->ring_clear2ssl,ps->buf+RINGBUFFER_SIZE);
 
@@ -1689,44 +1710,9 @@ static void check_ppid(struct ev_loop *loop, ev_timer *w, int revents) {
 
 }
 
-static void handle_clear_accept(struct ev_loop *loop, ev_io *w, int revents) {
-    (void) revents;
-    (void) loop;
-    struct sockaddr_storage addr;
-    socklen_t sl = sizeof(addr);
-    int client = accept(w->fd, (struct sockaddr *) &addr, &sl);
-    if (client == -1) {
-        switch (errno) {
-        case EMFILE:
-            L_ERR("{client} accept() failed; too many open files for this process\n");
-            break;
-
-        case ENFILE:
-            L_ERR("{client} accept() failed; too many open files for this system\n");
-            break;
-
-        default:
-            assert(errno == EINTR || errno == EWOULDBLOCK || errno == EAGAIN);
-            break;
-        }
-        return;
-    }
-
-    int flag = 1;
-    int ret = setsockopt(client, IPPROTO_TCP, TCP_NODELAY, (char *)&flag, sizeof(flag) );
-    if (ret == -1) {
-      perror("Couldn't setsockopt on client (TCP_NODELAY)\n");
-    }
-#ifdef TCP_CWND
-    int cwnd = 10;
-    ret = setsockopt(client, IPPROTO_TCP, TCP_CWND, &cwnd, sizeof(cwnd));
-    if (ret == -1) {
-      perror("Couldn't setsockopt on client (TCP_CWND)\n");
-    }
-#endif
-
-    setnonblocking(client);
-    settcpkeepalive(client);
+static void handle_clear_accept(RateLimiter::Socket *s) {
+    ev_io* w = s->w;
+    int client = s->fd;
 
     int back = create_back_socket();
 
@@ -1757,7 +1743,8 @@ static void handle_clear_accept(struct ev_loop *loop, ev_io *w, int revents) {
     ps->clear_connected = 1;
     ps->handshaked = 0;
     ps->renegotiation = 0;
-    ps->remote_ip = addr;
+    ps->empty = 1;
+    ps->remote_ip = s->addr;
     ringbuffer_init(&ps->ring_clear2ssl,ps->buf+RINGBUFFER_SIZE);
     ringbuffer_init(&ps->ring_ssl2clear,ps->buf);
 
@@ -1789,6 +1776,7 @@ static void handle_clear_accept(struct ev_loop *loop, ev_io *w, int revents) {
     start_connect(ps); /* start connect */
 }
 
+
 /* Set up the child (worker) process including libev event loop, read event
  * on the bound socket, etc */
 static void handle_connections() {
@@ -1811,12 +1799,18 @@ static void handle_connections() {
 #endif
 
     loop = ev_default_loop(EVFLAG_AUTO);
+    RateLimiter l(
+        loop,
+        (CONFIG->PMODE == SSL_CLIENT) ? handle_clear_accept : handle_accept,
+        CONFIG);
+
+    limiter = &l;
 
     ev_timer timer_ppid_check;
     ev_timer_init(&timer_ppid_check, check_ppid, 1.0, 1.0);
     ev_timer_start(loop, &timer_ppid_check);
 
-    ev_io_init(&listener, (CONFIG->PMODE == SSL_CLIENT) ? handle_clear_accept : handle_accept, listener_socket, EV_READ);
+    ev_io_init(&listener, rate_limit_accept, listener_socket, EV_READ);
     listener.data = default_ctx;
     ev_io_start(loop, &listener);
 

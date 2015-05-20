@@ -1,3 +1,6 @@
+#ifndef __CONFIGURATION_H
+#define __CONFIGURATION_H
+
 /**
  * configuration.h
  *
@@ -73,6 +76,10 @@ struct __stud_config {
     int TCP_KEEPALIVE_TIME;
     int DAEMONIZE;
     int PREFER_SERVER_CIPHERS;
+    int RATE_SWEEP_INTERVAL;
+    int RATE_BACKOFF_TIMEOUT;
+    int RATE_COUNTER_RESET_TIMEOUT;
+    int RATE_COUNTER_TRIGGER;
 };
 
 typedef struct __stud_config stud_config;
@@ -82,3 +89,5 @@ stud_config * config_new (void);
 void config_destroy (stud_config *cfg);
 int config_file_parse (char *file, stud_config *cfg);
 void config_parse_cli(int argc, char **argv, stud_config *cfg);
+
+#endif  /* __CONFIGURATION_H */

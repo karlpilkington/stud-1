@@ -10,7 +10,8 @@ PLATFORM = $(shell sh -c 'uname -s | tr "[A-Z]" "[a-z]"')
 
 CPPFLAGS = -O2 -m64 -Ideps/libev -g -march=native -DNDEBUG -Wall
 CXXFLAGS = -std=c++0x -fpermissive 
-OBJS = stud.o configuration.o deps/libev/.libs/libev.a
+OBJS = stud.o configuration.o rate-limiter.o bud-common.o \
+			deps/libev/.libs/libev.a
 LDFLAGS = -g -lm -m64
 STUD_ROOT_DIR := $(shell pwd)
 
@@ -76,7 +77,8 @@ endif
 ALL += stud
 realall: $(ALL)
 
-stud.o: stud.cc SimpleMemoryPool.hpp
+stud.o: stud.cc rate-limiter.cc rate-limiter.hpp bud-common.cc bud-common.hpp \
+		SimpleMemoryPool.hpp
 
 stud: $(OBJS)
 	$(CXX)  $(CPPFLAGS) $(CXXFLAGS) -o $@ $^ $(LDFLAGS)
