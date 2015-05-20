@@ -228,7 +228,7 @@ void RateLimiter::StartDelay(double secs) {
 
   delay_running_ = 1;
 
-  LOG(config(), "rate-limiter: invoking OnDelay in %d secs\n", secs);
+  LOG(config(), "rate-limiter: invoking OnDelay in %f secs\n", secs);
 }
 
 
