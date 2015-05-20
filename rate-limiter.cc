@@ -72,7 +72,7 @@ void RateLimiter::OnSweep(struct ev_loop* loop, ev_timer* w, int revents) {
   ASSERT(0 == bud_hashmap_iterate(&r->map_, SweepItems, &now),
          "Failed to sweep limiter hashmap items");
 
-  LOG(r->config(), "rate-limiter: sweeping\n");
+  LOG(r->config(), "op=\"rate-limiter/sweeping\"\n");
 }
 
 
@@ -179,7 +179,7 @@ void RateLimiter::Delay(ev_io* w, int fd, struct sockaddr_storage* addr) {
   int delay_interval = config()->RATE_BACKOFF_TIMEOUT;
   StartDelay(static_cast<double>(delay_interval));
 
-  LOG(config(), "rate-limiter: delaying socket\n");
+  LOG(config(), "op=\"rate-limiter/delaying-socket\"\n");
 }
 
 
@@ -228,7 +228,10 @@ void RateLimiter::StartDelay(double secs) {
 
   delay_running_ = 1;
 
-  LOG(config(), "rate-limiter: invoking OnDelay in %f secs\n", secs);
+  LOG(config(),
+      "op=\"rate-limiter/start-delay\" "
+          "description=\"invoking OnDelay in %f secs\"\n",
+      secs);
 }
 
 
@@ -236,7 +239,7 @@ void RateLimiter::OnDelay() {
   Socket* cur = first_socket_;
 
   delay_running_ = 0;
-  LOG(config(), "rate-limiter: OnDelay\n");
+  LOG(config(), "op=\"rate-limiter/on-delay\"\n");
 
   int delay_interval = config()->RATE_BACKOFF_TIMEOUT;
 
