@@ -37,7 +37,7 @@ class RateLimiter {
     struct sockaddr_storage addr;
 
     // Linked list
-    struct timeval time;
+    double time;
     Socket* next;
   };
 
@@ -46,7 +46,7 @@ class RateLimiter {
    public:
     Item(RateLimiter* limiter);
 
-    void Count(int delta, struct timeval* now);
+    void Count(int delta, double now);
 
     inline RateLimiter* limiter() { return limiter_; }
     inline bool triggered() {
@@ -57,7 +57,7 @@ class RateLimiter {
    protected:
     RateLimiter* limiter_;
 
-    struct timeval prev_time_;
+    double prev_time_;
     int prev_counter_;
     int counter_;
   };
@@ -70,7 +70,7 @@ class RateLimiter {
   static void OnDelay(struct ev_loop* loop, ev_timer* w, int revents);
 
   void OnDelay();
-  void StartDelay(int secs);
+  void StartDelay(double secs);
 
   struct ev_loop* loop_;
   struct ev_timer sweep_timer_;

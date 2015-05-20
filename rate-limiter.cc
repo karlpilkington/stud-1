@@ -43,6 +43,12 @@ RateLimiter::~RateLimiter() {
 }
 
 
+inline double timeval_to_double(struct timeval* tv) {
+  return static_cast<double>(tv->tv_sec) +
+         static_cast<double>(tv->tv_usec) * 1e-6;
+}
+
+
 int RateLimiter::DestroyItems(bud_hashmap_item_t* item, void* arg) {
   delete[] const_cast<char*>(item->key);
   item->key = NULL;
@@ -59,9 +65,10 @@ void RateLimiter::OnSweep(struct ev_loop* loop, ev_timer* w, int revents) {
 
   RateLimiter* r = reinterpret_cast<RateLimiter*>(w->data);
 
-  struct timeval now;
-  ASSERT(0 == gettimeofday(&now, NULL), "Failed to gettimeofday()");
+  struct timeval now_tv;
+  ASSERT(0 == gettimeofday(&now_tv, NULL), "Failed to gettimeofday()");
 
+  double now = timeval_to_double(&now_tv);
   ASSERT(0 == bud_hashmap_iterate(&r->map_, SweepItems, &now),
          "Failed to sweep limiter hashmap items");
 
@@ -71,10 +78,10 @@ void RateLimiter::OnSweep(struct ev_loop* loop, ev_timer* w, int revents) {
 
 int RateLimiter::SweepItems(bud_hashmap_item_t* item, void* arg) {
   Item* i = reinterpret_cast<Item*>(item->value);
-  struct timeval* now = reinterpret_cast<struct timeval*>(arg);
+  double* now = reinterpret_cast<double*>(arg);
 
   // Update timeout, decrease count
-  i->Count(0, now);
+  i->Count(0, *now);
 
   if (!i->empty())
     return 0;
@@ -129,7 +136,7 @@ void RateLimiter::Count(struct sockaddr_storage* addr) {
 
   struct timeval now;
   ASSERT(0 == gettimeofday(&now, NULL), "Failed to gettimeofday()");
-  item->Count(1, &now);
+  item->Count(1, timeval_to_double(&now));
 }
 
 
@@ -155,7 +162,10 @@ void RateLimiter::Delay(ev_io* w, int fd, struct sockaddr_storage* addr) {
   s->w = w;
   s->fd = fd;
   s->addr = *addr;
-  ASSERT(0 == gettimeofday(&s->time, NULL), "Failed to gettimeofday()");
+
+  struct timeval now;
+  ASSERT(0 == gettimeofday(&now, NULL), "Failed to gettimeofday()");
+  s->time = timeval_to_double(&now);
 
   // Insert into linked list (sorted by increasing time)
   if (first_socket_ == NULL)
@@ -167,25 +177,26 @@ void RateLimiter::Delay(ev_io* w, int fd, struct sockaddr_storage* addr) {
 
   // Start timer if not running
   int delay_interval = config()->RATE_BACKOFF_TIMEOUT;
-  StartDelay(delay_interval);
+  StartDelay(static_cast<double>(delay_interval));
 
   LOG(config(), "rate-limiter: delaying socket\n");
 }
 
 
 RateLimiter::Item::Item(RateLimiter* limiter) : limiter_(limiter),
+                                                prev_time_(0.0),
                                                 prev_counter_(0),
                                                 counter_(0) {
-  memset(&prev_time_, 0, sizeof(prev_time_));
 }
 
 
-void RateLimiter::Item::Count(int delta, struct timeval* now) {
+void RateLimiter::Item::Count(int delta, double now) {
   stud_config* config = limiter()->config();
 
   // Reduce counter after some time
-  if (now->tv_sec - prev_time_.tv_sec > config->RATE_COUNTER_RESET_TIMEOUT) {
-    prev_time_ = *now;
+  double timeout = static_cast<double>(config->RATE_COUNTER_RESET_TIMEOUT);
+  if (now - prev_time_ > timeout) {
+    prev_time_ = now;
     counter_ -= prev_counter_;
     prev_counter_ = counter_;
   }
@@ -207,12 +218,11 @@ void RateLimiter::OnDelay(struct ev_loop* loop,
 }
 
 
-void RateLimiter::StartDelay(int secs) {
+void RateLimiter::StartDelay(double secs) {
   if (delay_running_)
     return;
 
-  double delay_interval = static_cast<double>(secs);
-  ev_timer_init(&delay_timer_, OnDelay, delay_interval, 0.0);
+  ev_timer_init(&delay_timer_, OnDelay, secs, 0.0);
   delay_timer_.data = this;
   ev_timer_start(loop_, &delay_timer_);
 
@@ -231,13 +241,14 @@ void RateLimiter::OnDelay() {
   int delay_interval = config()->RATE_BACKOFF_TIMEOUT;
 
   // Figure out maximum socket's time
-  struct timeval edge;
-  ASSERT(0 == gettimeofday(&edge, NULL), "Failed to gettimeofday()");
+  struct timeval edge_tv;
+  ASSERT(0 == gettimeofday(&edge_tv, NULL), "Failed to gettimeofday()");
+  double edge = timeval_to_double(&edge_tv);
 
   // It should be much greater than delay_interval
-  edge.tv_sec -= delay_interval;
+  edge -= static_cast<double>(delay_interval);
 
-  while (cur != NULL && cur->time.tv_sec <= edge.tv_sec) {
+  while (cur != NULL && cur->time <= edge) {
     Socket* next = cur->next;
 
     InvokeCb(cur);
@@ -248,7 +259,7 @@ void RateLimiter::OnDelay() {
 
   // Restart timer if there are more things to run
   if (cur != NULL)
-    StartDelay(cur->time.tv_sec - edge.tv_sec);
+    StartDelay(cur->time - edge);
 
   first_socket_ = cur;
 
