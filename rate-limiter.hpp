@@ -5,6 +5,7 @@
 #include <sys/socket.h>
 #include <sys/time.h>
 #include <netinet/in.h>
+#include <limits.h>
 
 #include <ev.h>
 
@@ -55,6 +56,7 @@ class RateLimiter {
     inline bool empty() { return counter_ == 0; }
 
    protected:
+    static const int kMaxCounter = INT_MAX;
     RateLimiter* limiter_;
 
     double prev_time_;

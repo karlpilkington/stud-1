@@ -202,7 +202,7 @@ void RateLimiter::Item::Count(int delta, double now) {
   }
 
   counter_ += delta;
-  if (counter_ > config->RATE_COUNTER_TRIGGER)
+  if (counter_ >= kMaxCounter)
     counter_ = config->RATE_COUNTER_TRIGGER;
 }
 
