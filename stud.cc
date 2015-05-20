@@ -2131,7 +2131,9 @@ int main(int argc, char **argv) {
 
     master_pid = getpid();
 
-    start_children(0, CONFIG->NCORES);
+    handle_connections();
+   //  start_children(0, CONFIG->NCORES);
+    exit(0);
 
 #ifdef USE_SHARED_CACHE
     if (CONFIG->SHCUPD_PORT) {
