@@ -182,7 +182,7 @@ stud_config * config_new (void) {
   r->DAEMONIZE          = 0;
   r->PREFER_SERVER_CIPHERS = 0;
   r->RATE_SWEEP_INTERVAL = 600;
-  r->RATE_BACKOFF_TIMEOUT = 15;
+  r->RATE_BACKOFF_TIMEOUT = 30;
   r->RATE_COUNTER_RESET_TIMEOUT = 60;
   r->RATE_COUNTER_TRIGGER = 30;
 
