@@ -25,7 +25,7 @@ RateLimiter::RateLimiter(struct ev_loop* loop,
          "Failed to init rate limiter hashmap");
 
   double sweep_interval = static_cast<double>(config->RATE_SWEEP_INTERVAL);
-  ev_timer_init(&sweep_timer_, OnSweep, sweep_interval, sweep_interval);
+  ev_timer_init(&sweep_timer_, RateLimiter::OnSweep, sweep_interval, sweep_interval);
   sweep_timer_.data = this;
 
   ev_timer_start(loop_, &sweep_timer_);
@@ -49,7 +49,7 @@ inline double timeval_to_double(struct timeval* tv) {
 }
 
 
-int RateLimiter::DestroyItems(bud_hashmap_item_t* item, void* arg) {
+static int RateLimiter::DestroyItems(bud_hashmap_item_t* item, void* arg) {
   delete[] const_cast<char*>(item->key);
   item->key = NULL;
   delete reinterpret_cast<Item*>(item->value);
@@ -59,7 +59,7 @@ int RateLimiter::DestroyItems(bud_hashmap_item_t* item, void* arg) {
 
 
 // Sweep all items with zero counter
-void RateLimiter::OnSweep(struct ev_loop* loop, ev_timer* w, int revents) {
+static void RateLimiter::OnSweep(struct ev_loop* loop, ev_timer* w, int revents) {
   (void) loop;
   (void) revents;
 
@@ -69,14 +69,14 @@ void RateLimiter::OnSweep(struct ev_loop* loop, ev_timer* w, int revents) {
   ASSERT(0 == gettimeofday(&now_tv, NULL), "Failed to gettimeofday()");
 
   double now = timeval_to_double(&now_tv);
-  ASSERT(0 == bud_hashmap_iterate(&r->map_, SweepItems, &now),
+  ASSERT(0 == bud_hashmap_iterate(&r->map_, RateLimiter::SweepItems, &now),
          "Failed to sweep limiter hashmap items");
 
   LOG(r->config(), "op=\"rate-limiter/sweeping\"\n");
 }
 
 
-int RateLimiter::SweepItems(bud_hashmap_item_t* item, void* arg) {
+static int RateLimiter::SweepItems(bud_hashmap_item_t* item, void* arg) {
   Item* i = reinterpret_cast<Item*>(item->value);
   double* now = reinterpret_cast<double*>(arg);
 
@@ -207,7 +207,7 @@ void RateLimiter::Item::Count(int delta, double now) {
 }
 
 
-void RateLimiter::OnDelay(struct ev_loop* loop,
+static void RateLimiter::OnDelay(struct ev_loop* loop,
                           ev_timer* w,
                           int revents) {
   (void) loop;
@@ -222,7 +222,7 @@ void RateLimiter::StartDelay(double secs) {
   if (delay_running_)
     return;
 
-  ev_timer_init(&delay_timer_, OnDelay, secs, 0.0);
+  ev_timer_init(&delay_timer_, RateLimiter::OnDelay, secs, 0.0);
   delay_timer_.data = this;
   ev_timer_start(loop_, &delay_timer_);
 
