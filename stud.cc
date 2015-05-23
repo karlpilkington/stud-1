@@ -2039,21 +2039,9 @@ static int get_current_epoch()
     return epoch;
 }
 
-static void periodic_cleanup() {
+static void periodic_cleanup(struct ev_loop *loop, ev_timer *w, int revents) {
     get_current_epoch();
     process_delayed_sockets();
-}
-
-static void check_ppid(struct ev_loop *loop, ev_timer *w, int revents) {
-    (void) revents;
-    pid_t ppid = getppid();
-    if (ppid != master_pid) {
-        L_ERR("{core} Process %d detected parent death, closing listener socket.\n", child_num);
-        ev_timer_stop(loop, w);
-        ev_io_stop(loop, &listener);
-        close(listener_socket);
-    }
-
 }
 
 static void handle_clear_accept(struct ev_loop *loop, ev_io *w, int revents) {
@@ -2179,10 +2167,9 @@ static void handle_connections() {
 
     loop = ev_default_loop(EVFLAG_AUTO);
 
-    ev_timer timer_ppid_check;
-    //ev_timer_init(&timer_ppid_check, check_ppid, 1.0, 1.0);
-    ev_timer_init(&timer_ppid_check, periodic_cleanup , 1.0, 1.0);
-    ev_timer_start(loop, &timer_ppid_check);
+    ev_timer timer_periodic_cleanup_check;
+    ev_timer_init(&timer_periodic_cleanup_check, periodic_cleanup , 1.0, 1.0);
+    ev_timer_start(loop, &timer_periodic_cleanup_check);
 
     ev_io_init(&listener, (CONFIG->PMODE == SSL_CLIENT) ? handle_clear_accept : handle_accept, listener_socket, EV_READ);
     listener.data = default_ctx;
