@@ -1895,8 +1895,8 @@ static void handle_accept_second_half(delayed_t delayed)
         fprintf(stderr,"Ran out of memory in the memory pool -- recompile with a larger memory pool");
         close(client);
         close(back);
-        SSL_set_shutdown(ps->ssl, SSL_SENT_SHUTDOWN);
-        SSL_free(ps->ssl);
+        SSL_set_shutdown(ssl, SSL_SENT_SHUTDOWN);
+        SSL_free(ssl);
         ERR_clear_error();
         return;
     }
