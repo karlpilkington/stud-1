@@ -69,6 +69,7 @@ char *inet_ntoa_r(const struct in_addr in, char *buffer, socklen_t buflen);
 #include <openssl/asn1.h>
 #include <openssl/crypto.h>
 #include <ev.h>
+#include "deps/jemalloc-3.6.0/include/jemalloc/jemalloc.h"
 
 #ifdef STUD_DTRACE
 # include "stud_provider.h"
@@ -799,7 +800,7 @@ static void *stud_malloc(size_t size){
     if(((uint64_t)size - MAX_SIZE) <=4096){
         ptr=SPool24K.Get();
     }
-    return (ptr!=NULL)?ptr:malloc(size);
+    return (ptr!=NULL)?ptr:je_malloc(size);
 }
 
 static void *stud_realloc(void *ptr, size_t size){
@@ -811,14 +812,14 @@ static void *stud_realloc(void *ptr, size_t size){
         SPool24K.Release((char *)ptr);
         return stud_malloc(size);
     }
-    return realloc(ptr,size);
+    return je_realloc(ptr,size);
 }
 
 static void stud_free(void *ptr){
     if(unlikely(((uint64_t)ptr-(uint64_t)SPool24K_Start) <= SPool24K_Size)){
         SPool24K.Release((char *)ptr);
     }else{
-        free(ptr);
+        je_free(ptr);
     }
 }
 

@@ -55,6 +55,9 @@ CPPFLAGS += -Ideps/openssl/include
 OBJS += deps/openssl/libssl.a deps/openssl/libcrypto.a
 endif
 
+OBJS += deps/jemalloc-3.6.0/lib/libjemalloc.a
+#OBJS += deps/jemalloc-3.5.1/lib/libjemalloc.a
+
 ifeq ($(PLATFORM),sunos)
 LDFLAGS += -lsocket -L/opt/local/lib -Wl,-R/opt/local/lib -lnsl
 CPPFLAGS += -DSTUD_DTRACE=1
