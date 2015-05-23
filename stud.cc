@@ -70,6 +70,8 @@ char *inet_ntoa_r(const struct in_addr in, char *buffer, socklen_t buflen);
 #include <openssl/crypto.h>
 #include <ev.h>
 #include "deps/jemalloc-3.6.0/include/jemalloc/jemalloc.h"
+#include <exception> // for std::bad_alloc
+#include <new>
 
 #ifdef STUD_DTRACE
 # include "stud_provider.h"
@@ -2526,4 +2528,18 @@ int main(int argc, char **argv) {
     }
 
     exit(0); /* just a formality; we never get here */
+}
+
+void* operator new (size_t size) __attribute__((malloc,alloc_size(1)));
+void* operator new (size_t size)
+{
+     void *p=je_malloc(size);
+      if (unlikely(!p)) // did malloc succeed?
+            throw std::bad_alloc(); // ANSI/ISO compliant behavior
+       return p;
+}
+
+void operator delete (void *p)
+{
+     je_free(p);
 }
