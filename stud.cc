@@ -83,6 +83,11 @@ char *inet_ntoa_r(const struct in_addr in, char *buffer, socklen_t buflen);
 #include "configuration.h"
 #include "SimpleMemoryPool.hpp"
 
+#include <unordered_map>
+#include <time.h>
+
+
+
 #ifndef MSG_NOSIGNAL
 # define MSG_NOSIGNAL 0
 #endif
@@ -179,7 +184,12 @@ typedef struct proxystate {
     int want_shutdown:1;                /* Connection is half-shutdown */
     int handshaked:1;                   /* Initial handshake happened */
     int clear_connected:1;              /* Clear stream is connected  */
+    int need_to_start_connect:1 ;       /*  Need to start connection to backend */
     int renegotiation:1;                /* Renegotation is occuring */
+    int empty:1;                        /* No incoming data */
+    int delayed:1;                   /* Is the backend connection delayed */
+    int blacklist_ip_entry:1;           /* Has an entry in blacklisted ip hash map */
+    int session_reuse:1;
 
     SSL *ssl;                           /* OpenSSL SSL state */
 
@@ -189,10 +199,40 @@ typedef struct proxystate {
     char buf[RINGBUFFER_SIZE*2];
 } proxystate;
 
-SimpleMemoryPool <proxystate,8192,sizeof(proxystate)> SPool;
-SimpleMemoryPool <char,8192,24*1024> SPool24K;
-char *SPool24K_Start;
-size_t SPool24K_Size;
+static SimpleMemoryPool <proxystate,8192,sizeof(proxystate)> SPool;
+static SimpleMemoryPool <char,8192,24*1024> SPool24K;
+static char *SPool24K_Start;
+static size_t SPool24K_Size;
+
+typedef struct {
+    uint8_t empty , data;
+} client_status_t;
+
+typedef struct{
+    client_status_t s[8];
+} counter_t;
+
+typedef struct {
+    int client ;
+    uint32_t ip;
+    time_t ts;
+} delayed_t;
+
+static std::unordered_map<uint32_t, counter_t> BlackListedIP;
+static int CurrentEpoch; // 0 or 1
+static time_t lastTS;
+static const int CTIME_LEN = 26;
+static char TimeBuf[CTIME_LEN];
+
+static const int COUNTER_THRESHOLD = 16;
+static const int TWICE_COUNTER_THRESHOLD = COUNTER_THRESHOLD * 2;
+
+static const int MAX_DELAYED_ENTRIES = 8192;
+static delayed_t Delayed[MAX_DELAYED_ENTRIES];
+static int DelayedStart, DelayedEnd;
+
+static int EmptyClients, WorkingClients, DelayedClients, WronglyDelayedClients;
+static int EmptyClientsSessionReuse, DelayedClientsSessionReuse;
 
 #define LOG(...)                                            \
     do {                                                    \
@@ -743,6 +783,11 @@ SSL_CTX *make_ctx(const char *pemfile) {
 #endif
 
     RSA_free(rsa);
+    const long SSL_CACHE_SIZE = 64*1024;
+    SSL_CTX_sess_set_cache_size(ctx, SSL_CACHE_SIZE);
+    const long SSL_SESSION_TIMEOUT = 3600 * 3 ; // 3 hours -- google uses this
+    SSL_CTX_set_timeout(ctx, SSL_SESSION_TIMEOUT);
+    fprintf(stdout,"SSL Cache size: %ld  SSL Session Timeout: %ld\n",SSL_CTX_sess_get_cache_size(ctx), SSL_CTX_get_timeout(ctx));
     return ctx;
 }
 
@@ -963,11 +1008,41 @@ static inline void safe_enable_io(proxystate *ps, ev_io *w) {
         ev_io_start(loop, w);
 }
 
+static inline int get_empty_counter_value(counter_t &counter)
+{
+    return (int)counter.s[0].empty + counter.s[1].empty + counter.s[2].empty + counter.s[3].empty + \
+        counter.s[4].empty + counter.s[5].empty + counter.s[6].empty + counter.s[7].empty;
+}
+static inline int get_data_counter_value(counter_t &counter)
+{
+    return (int)counter.s[0].data + counter.s[1].data + counter.s[2].data + counter.s[3].data + \
+        counter.s[4].data + counter.s[5].data + counter.s[6].data + counter.s[7].data;
+}
+static inline void increment_empty_counter(counter_t &counter, int epoch) 
+{
+    if(likely(counter.s[epoch].empty < 255)){
+        counter.s[epoch].empty++;
+    }
+}
+static inline void increment_data_counter(counter_t &counter, int epoch) 
+{
+    if(likely(counter.s[epoch].data < 255)){
+        counter.s[epoch].data++;
+    }
+}
+static inline void clear_counter(counter_t &counter, int epoch)
+{
+    counter.s[epoch].data = counter.s[epoch].empty = 0;
+}
+
+
+
+static int get_current_epoch();
 /* Only enable a libev ev_io event if the proxied connection still
  * has both up and down connected */
 static void shutdown_proxy(proxystate *ps, SHUTDOWN_REQUESTOR req, int backend, char *reason) {
     if (ps->want_shutdown || (req == SHUTDOWN_HARD) || (req == SHUTDOWN_CLEAR && ringbuffer_is_empty(&ps->ring_clear2ssl)) || 
-        (req == SHUTDOWN_SSL && ringbuffer_is_empty(&ps->ring_ssl2clear))) {
+        (req == SHUTDOWN_SSL && (ps->need_to_start_connect || ringbuffer_is_empty(&ps->ring_ssl2clear)))) {
 
         ev_io_stop(loop, &ps->ev_w_ssl);
         ev_io_stop(loop, &ps->ev_r_ssl);
@@ -989,6 +1064,34 @@ static void shutdown_proxy(proxystate *ps, SHUTDOWN_REQUESTOR req, int backend, 
         ps->fd_up = -1;
         ps->fd_down = -1;
         ps->ssl = NULL;
+        if(ps->empty){
+            // add an entry
+            int epoch = CurrentEpoch; //get_current_epoch();
+            uint32_t client_ip = ((struct sockaddr_in *)&(ps->remote_ip))->sin_addr.s_addr;
+            struct in_addr in ;
+            in.s_addr = client_ip;
+            auto iter = BlackListedIP.find(client_ip);
+            int session_reuse = ((int) ps->session_reuse) & 0x01;
+            if(session_reuse){
+                EmptyClientsSessionReuse++;
+                if(ps->delayed){
+                    DelayedClientsSessionReuse++;
+                }
+            }
+            if(iter != BlackListedIP.end()){
+                increment_empty_counter(iter->second,epoch);
+                fprintf(stdout, "[%s] Found an entry for ip: %s empty_clients: %d data_clients %d session_reused: %d\n",TimeBuf,inet_ntoa(in),get_empty_counter_value(iter->second), get_data_counter_value(iter->second), session_reuse);
+                
+            } else {
+                counter_t newCounter;
+                memset(&newCounter,0,sizeof(counter_t));
+                increment_empty_counter(newCounter, epoch);
+                //newCounter[odd/even]++;
+                BlackListedIP.insert(std::make_pair(client_ip, newCounter));
+                fprintf(stdout, "[%s] Created a new counter  entry for ip: %s session_reused: %d\n", TimeBuf, inet_ntoa(in), session_reuse);
+            }
+            EmptyClients++;
+        }
         
         SPool.Release(ps);
         
@@ -1249,8 +1352,15 @@ static void end_handshake(proxystate *ps) {
     get_client_info(ps, host, sizeof(host), &port);
     SSL_SESSION* sess = SSL_get_session(ps->ssl);
     long expiry = SSL_SESSION_get_time(sess) + SSL_SESSION_get_timeout(sess) - (time_t) ev_now(loop);
+    /*   unsigned int session_id_len = 0;
+    const unsigned char *session_id =  SSL_SESSION_get_id(sess, &session_id_len);
+    unsigned long session_id_hash;
+    memcpy(&session_id_hash, session_id,8);
+    fprintf(stdout,"session_id_len: %u  session_id_hash: %lu\n", session_id_len, session_id_hash); */
 
-    if (SSL_session_reused(ps->ssl)) {
+    int session_reuse = SSL_session_reused(ps->ssl);
+    ps->session_reuse = session_reuse;
+    if (session_reuse) {
       LOG("op=\"stud session reuse\" client=\"%s:%d\" expiry=\"%ld\"\n", host, port, expiry);
     } else {
       LOG("op=\"stud session new\" client=\"%s:%d\" expiry=\"%ld\"\n", host, port, expiry);
@@ -1258,7 +1368,7 @@ static void end_handshake(proxystate *ps) {
 
     // DTrace probe
     if (STUD_SSL_SESSION_REUSE_ENABLED()) {
-        if (SSL_session_reused(ps->ssl)) {
+        if (session_reuse) {
             STUD_SSL_SESSION_REUSE(host, port, expiry);
         } else {
             STUD_SSL_SESSION_NEW(host, port, expiry);
@@ -1308,9 +1418,11 @@ static void end_handshake(proxystate *ps) {
                 ringbuffer_advance_write_head(&ps->ring_ssl2clear, 1U + 4U);
             }
         }
+        /* set need_to_start_connect and connect after first byte from client */
+        ps->need_to_start_connect = 1;
         /* start connect now */
-        if (start_connect(ps) != 0)
-          return;
+        /*   if (start_connect(ps) != 0)
+          return; */
     }
     else {
         /* stud used in client mode, keep client session ) */
@@ -1437,13 +1549,30 @@ static void ssl_read(struct ev_loop *loop, ev_io *w, int revents) {
         offset+=ret;
     }
 
+    // if it is empty and has more than the proxy line
+    if(ps->empty && (offset > prev_len)){
+        ps->empty = 0 ;
+        WorkingClients++;
+        if(ps->delayed){
+            WronglyDelayedClients++;
+            // get the counter and increment the data value
+            uint32_t ip = ((struct sockaddr_in *) &ps->remote_ip)->sin_addr.s_addr;
+            //get_current_epoch();
+            auto iter = BlackListedIP.find(ip);
+            if(iter != BlackListedIP.end()){
+                increment_data_counter(iter->second,CurrentEpoch);
+            }
+            struct in_addr in = ((struct sockaddr_in *)&(ps->remote_ip))->sin_addr;
+            fprintf(stdout, "[%s] Delayed connection from ip : %s has working client\n", TimeBuf, inet_ntoa(in));
+        }
+    }
     // Fix CVE-2009-3555. Disable reneg if started by client.
     if (ps->renegotiation) {
         shutdown_proxy(ps, SHUTDOWN_SSL, 0, (char *)"server rejects client renegotiation request, closing connection");
         return;
     }
 
-    bool need_append=true;
+    bool need_append=(offset > prev_len);
     if(likely(ps->clear_connected  && (offset > 0))){
         if(unlikely(prev_len > 0)){
             ringbuffer_get2(ring,buf,prev_len);
@@ -1453,8 +1582,9 @@ static void ssl_read(struct ev_loop *loop, ev_io *w, int revents) {
         if(likely(ret > 0)){
             ringbuffer_advance_read_head(ring,ret < prev_len?ret:prev_len);
             if(unlikely(ret < offset)){
-                //append data to ring
-                ringbuffer_append(ring,buf+ret,offset-ret);
+                //append data to ring but we already have upto prev_len, so append after that
+                int left_over = (ret < prev_len) ? prev_len : ret;
+                ringbuffer_append(ring,buf+left_over,offset-left_over);
             }
             need_append=false;
         }else if (unlikely(!(errno == EAGAIN || errno == EWOULDBLOCK || errno == EINTR))){
@@ -1479,8 +1609,15 @@ static void ssl_read(struct ev_loop *loop, ev_io *w, int revents) {
         }
         else if (err == SSL_ERROR_WANT_READ) { } /* incomplete SSL data */
         else
-            handle_fatal_ssl_error(ps, err, w->fd == ps->fd_up ? 0 : 1);
+            return handle_fatal_ssl_error(ps, err, w->fd == ps->fd_up ? 0 : 1);
     }
+    if(unlikely(ps->need_to_start_connect  && (offset > prev_len))){
+        ps->need_to_start_connect = 0;
+        /* start connect now */
+        if (unlikely(start_connect(ps) != 0))
+            return;
+    }
+
     if (unlikely(!(ringbuffer_is_empty(ring)) && (ps->clear_connected))){
         safe_enable_io(ps, &ps->ev_w_clear);
     }
@@ -1591,6 +1728,50 @@ static void handle_accept(struct ev_loop *loop, ev_io *w, int revents) {
     setnonblocking(client);
     settcpkeepalive(client);
 
+    // check the BlackListedIP
+    uint32_t ip = ((struct sockaddr_in *) &addr)->sin_addr.s_addr;
+
+    //get_current_epoch();
+    auto iter = BlackListedIP.find(ip);
+    if(iter != BlackListedIP.end()){
+        // check the counters
+        static const int MAX_ERR_CONNECTIONS = 3;
+
+        int data_counter = get_data_counter_value(iter->second);
+        int empty_counter = get_empty_counter_value(iter->second);
+        /*  char TimeBuf[CTIME_LEN];
+        struct in_addr in;
+        in.s_addr = ip;
+        fprintf(stdout, "[%s] counter value = %d for BlackListed IP: %s\n", TimeBuf, counter , inet_ntoa(in)); */
+        if((data_counter << 3) > empty_counter ){
+            // passing through IP
+            struct in_addr in;
+            in.s_addr = ip;
+            fprintf(stdout, "[%s] Passing through IP: %s as data_counter: %d empty_counter: %d\n", TimeBuf, inet_ntoa(in), data_counter, empty_counter);
+        } else if(empty_counter >= MAX_ERR_CONNECTIONS) {
+              // we need to black list it
+              // add to Delayed and return;
+              DelayedClients++;
+              struct in_addr in;
+              in.s_addr = ip;
+              fprintf(stdout, "[%s] Delaying connection from ip : %s empty_counter: %d\n", TimeBuf, inet_ntoa(in), empty_counter);
+              // TODO check for overflow
+              Delayed[DelayedEnd].client = client;
+              Delayed[DelayedEnd].ip = ip;
+              Delayed[DelayedEnd].ts = lastTS;
+              DelayedEnd = (DelayedEnd + 1) & (MAX_DELAYED_ENTRIES - 1);
+              // check for overflow
+              if(unlikely(DelayedEnd == DelayedStart)){
+                  // we need to leave 1 slot open to distinguish full and empty states
+                  in.s_addr = Delayed[DelayedStart].ip;
+                  fprintf(stdout, "[%s] Overflow in Delayed Array, closing out socket  from ip : %s added %ld seconds ago\n", TimeBuf, inet_ntoa(in), (lastTS - Delayed[DelayedStart].ts));
+                  close(Delayed[DelayedStart].client);
+                  DelayedStart = (DelayedStart + 1) & (MAX_DELAYED_ENTRIES -1);
+              }
+              return;
+        }
+    }
+
     int back = create_back_socket();
 
     if (back == -1) {
@@ -1631,8 +1812,111 @@ static void handle_accept(struct ev_loop *loop, ev_io *w, int revents) {
     ps->ssl = ssl;
     ps->want_shutdown = 0;
     ps->clear_connected = 0;
+    ps->need_to_start_connect = 0;
     ps->handshaked = 0;
     ps->renegotiation = 0;
+    ps->empty = 1;
+    ps->delayed = 0;
+    ps->blacklist_ip_entry = 0;
+    ps->session_reuse = 0;
+    ps->remote_ip = addr;
+    ringbuffer_init(&ps->ring_ssl2clear,ps->buf);
+    ringbuffer_init(&ps->ring_clear2ssl,ps->buf+RINGBUFFER_SIZE);
+
+    /* set up events */
+    ev_io_init(
+           &ps->ev_r_ssl,
+           ssl_read,
+           client,
+           EV_READ
+           );
+    ev_io_init(&ps->ev_w_ssl, ssl_write, client, EV_WRITE);
+
+    ev_io_init(&ps->ev_r_handshake, client_handshake, client, EV_READ);
+    ev_io_init(&ps->ev_w_handshake, client_handshake, client, EV_WRITE);
+
+    ev_io_init(&ps->ev_proxy, client_proxy_proxy, client, EV_READ);
+
+    ev_io_init(&ps->ev_w_connect, handle_connect, back, EV_WRITE);
+
+    ev_io_init(&ps->ev_w_clear, clear_write, back, EV_WRITE);
+    ev_io_init(&ps->ev_r_clear, clear_read, back, EV_READ);
+
+    ps->ev_r_ssl.data = ps;
+    ps->ev_w_ssl.data = ps;
+    ps->ev_r_clear.data = ps;
+    ps->ev_w_clear.data = ps;
+    ps->ev_proxy.data = ps;
+    ps->ev_w_connect.data = ps;
+    ps->ev_r_handshake.data = ps;
+    ps->ev_w_handshake.data = ps;
+
+    /* Link back proxystate to SSL state */
+    SSL_set_app_data(ssl, ps);
+
+    if (CONFIG->PROXY_PROXY_LINE) {
+        ev_io_start(loop, &ps->ev_proxy);
+    }
+    else {
+        start_handshake(ps, SSL_ERROR_WANT_READ); /* for client-first handshake */
+    }
+}
+
+static void handle_accept_second_half(delayed_t delayed)
+{
+
+    int client = delayed.client;
+    int back = create_back_socket();
+
+    if (back == -1) {
+        close(client);
+        perror("{backend-socket}");
+        return;
+    }
+
+    SSL_CTX * ctx = (SSL_CTX *)listener.data;
+    SSL *ssl = SSL_new(default_ctx);
+    long mode = SSL_MODE_ENABLE_PARTIAL_WRITE | SSL_MODE_ACCEPT_MOVING_WRITE_BUFFER;
+#ifdef SSL_MODE_RELEASE_BUFFERS
+    mode |= SSL_MODE_RELEASE_BUFFERS;
+#endif
+    SSL_set_mode(ssl, mode);
+    SSL_set_accept_state(ssl);
+    SSL_set_fd(ssl, client);
+
+#ifdef OPENSSL_NPN_NEGOTIATED
+    // Advertise SPDY support
+    SSL_CTX_set_next_protos_advertised_cb(ctx, ssl_advertise_spdy, NULL);
+#endif
+
+    //proxystate *ps = (proxystate *)malloc(sizeof(proxystate));
+    proxystate *ps = SPool.Get();
+    if(unlikely(ps==NULL)){
+        fprintf(stderr,"Ran out of memory in the memory pool -- recompile with a larger memory pool");
+        close(client);
+        close(back);
+        SSL_set_shutdown(ps->ssl, SSL_SENT_SHUTDOWN);
+        SSL_free(ps->ssl);
+        ERR_clear_error();
+        return;
+    }
+
+    ps->fd_up = client;
+    ps->fd_down = back;
+    ps->ssl = ssl;
+    ps->want_shutdown = 0;
+    ps->clear_connected = 0;
+    ps->need_to_start_connect = 0;
+    ps->handshaked = 0;
+    ps->renegotiation = 0;
+    ps->empty = 1;
+    ps->delayed = 1;
+    ps->blacklist_ip_entry = 1;
+    ps->session_reuse = 0;
+    struct sockaddr_storage addr;
+    addr.ss_family = AF_INET;
+    ((struct sockaddr_in *) &addr)->sin_addr.s_addr = delayed.ip;
+
     ps->remote_ip = addr;
     ringbuffer_init(&ps->ring_ssl2clear,ps->buf);
     ringbuffer_init(&ps->ring_clear2ssl,ps->buf+RINGBUFFER_SIZE);
@@ -1677,16 +1961,87 @@ static void handle_accept(struct ev_loop *loop, ev_io *w, int revents) {
 }
 
 
-static void check_ppid(struct ev_loop *loop, ev_timer *w, int revents) {
-    (void) revents;
-    pid_t ppid = getppid();
-    if (ppid != master_pid) {
-        L_ERR("{core} Process %d detected parent death, closing listener socket.\n", child_num);
-        ev_timer_stop(loop, w);
-        ev_io_stop(loop, &listener);
-        close(listener_socket);
+static void process_delayed_sockets()
+{
+    if(DelayedStart == DelayedEnd) {
+        return;
     }
+    time_t cur_time = time(NULL);
+    const int DELAY_THRESHOLD = 30;
+    struct in_addr in;
+    for(;DelayedStart != DelayedEnd ; DelayedStart = ((DelayedStart + 1 ) & (MAX_DELAYED_ENTRIES -1))){
+        if((cur_time - Delayed[DelayedStart].ts) >= DELAY_THRESHOLD){
+            in.s_addr = Delayed[DelayedStart].ip;
+            fprintf(stdout, "[%s] calling delayed accept for ip: %s \n", TimeBuf, inet_ntoa(in));
+            handle_accept_second_half(Delayed[DelayedStart]);
+        } else {
+            break;
+        }
+    }
+    if(DelayedStart == DelayedEnd) {
+        DelayedStart = DelayedEnd = 0;
+    }
+}
 
+static void perform_flip(int new_epoch, int old_epoch)
+{
+    auto iter = BlackListedIP.begin();
+    auto end = BlackListedIP.end();
+    bool flag = false;
+    int count = 0, erased=0;
+    while(iter != end){
+        count++;
+        clear_counter(iter->second, new_epoch);
+        if(get_empty_counter_value(iter->second)){
+                iter++;
+        } else {
+            struct in_addr in;
+            in.s_addr = iter->first;
+            fprintf(stdout, "[%s] Erasing counter for ip: %s \n", TimeBuf, inet_ntoa(in));
+            iter = BlackListedIP.erase(iter);
+            erased++;
+        }
+        flag = true;
+    }
+    fprintf(stdout, "[%s] perform_flip : %s  new epoch: %d  BlackListedIPs: %d  Erased From BlackList: %d\
+            Working Clients: %d, Empty Clients: %d Delayed Clients: %d Wrongly Delayed Clients: %d Empty Clients Session Reuse: %d Delayed Clients Session Reuse: %d\
+            Number of Cached SSL Sessions: %ld Cache Hits: %ld Cache Misses: %ld Cache Timeouts: %ld Cache Full: %ld\n", \
+            TimeBuf, flag ? "performed" : "not performed", new_epoch, count, erased, \
+            WorkingClients, EmptyClients, DelayedClients, WronglyDelayedClients, EmptyClientsSessionReuse, DelayedClientsSessionReuse, \
+            SSL_CTX_sess_number(default_ctx), SSL_CTX_sess_hits(default_ctx), SSL_CTX_sess_misses(default_ctx), SSL_CTX_sess_timeouts(default_ctx), \
+            SSL_CTX_sess_cache_full(default_ctx) );
+
+    WorkingClients = EmptyClients = DelayedClients = WronglyDelayedClients =  0;
+    EmptyClientsSessionReuse = DelayedClientsSessionReuse = 0;
+    process_delayed_sockets();
+    fflush(stdout);
+}
+
+static int get_current_epoch()
+{
+    time_t cur_time = time(NULL);
+    bool flag=false;
+    if(cur_time - lastTS > (4 * TWICE_COUNTER_THRESHOLD)){
+        // clear the entire blacklist 
+        BlackListedIP.clear();
+        flag = true;
+    }
+    int epoch = (cur_time & (64+32+16)) >> 4;
+    if(flag || (CurrentEpoch != epoch)){
+        // perform flip
+        perform_flip(epoch, CurrentEpoch);
+        CurrentEpoch = epoch;
+
+    }
+    lastTS = cur_time;
+    ctime_r(&lastTS,TimeBuf);
+    TimeBuf[CTIME_LEN-2]= '\0';
+    return epoch;
+}
+
+static void periodic_cleanup(struct ev_loop *loop, ev_timer *w, int revents) {
+    get_current_epoch();
+    process_delayed_sockets();
 }
 
 static void handle_clear_accept(struct ev_loop *loop, ev_io *w, int revents) {
@@ -1812,9 +2167,9 @@ static void handle_connections() {
 
     loop = ev_default_loop(EVFLAG_AUTO);
 
-    ev_timer timer_ppid_check;
-    ev_timer_init(&timer_ppid_check, check_ppid, 1.0, 1.0);
-    ev_timer_start(loop, &timer_ppid_check);
+    ev_timer timer_periodic_cleanup_check;
+    ev_timer_init(&timer_periodic_cleanup_check, periodic_cleanup , 1.0, 1.0);
+    ev_timer_start(loop, &timer_periodic_cleanup_check);
 
     ev_io_init(&listener, (CONFIG->PMODE == SSL_CLIENT) ? handle_clear_accept : handle_accept, listener_socket, EV_READ);
     listener.data = default_ctx;
@@ -2092,6 +2447,9 @@ int main(int argc, char **argv) {
     }
 #endif
 
+    //fprintf(stdout,"sizeof(counter_t) = %d\n",sizeof(counter_t));
+    //fprintf(stdout,"sizeof(client_status_t) = %lu\n",sizeof(client_status_t));
+    //exit(1);
     // initialize configuration
     CONFIG = config_new();
 
@@ -2136,6 +2494,14 @@ int main(int argc, char **argv) {
     }
 
     master_pid = getpid();
+
+    BlackListedIP.reserve(2048);
+    lastTS = time(NULL);
+    ctime_r(&lastTS,TimeBuf);
+    TimeBuf[CTIME_LEN-2]= '\0';
+    get_current_epoch();
+    handle_connections();
+    exit(0);
 
     start_children(0, CONFIG->NCORES);
 
