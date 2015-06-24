@@ -339,6 +339,10 @@ static int init_dh(SSL_CTX *ctx, const char *cert) {
     LOG("{core} DH initialized with %d bit key\n", 8*DH_size(dh));
     DH_free(dh);
 
+    return 0;
+}
+
+static int init_ecdh(SSL_CTX *ctx) {
 #ifndef OPENSSL_NO_EC
 #ifdef NID_X9_62_prime256v1
     EC_KEY *ecdh = NULL;
@@ -752,6 +756,7 @@ SSL_CTX *make_ctx(const char *pemfile) {
 
 #ifndef OPENSSL_NO_DH
     init_dh(ctx, pemfile);
+    init_ecdh(ctx);
 #endif /* OPENSSL_NO_DH */
 
 #ifndef OPENSSL_NO_TLSEXT
